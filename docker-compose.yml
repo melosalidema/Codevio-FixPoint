@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fixpoint
+      POSTGRES_PASSWORD: fixpoint
+      POSTGRES_DB: fixpoint
+    ports:
+      - "5432:5432"
+    volumes:
+      - fixpoint_pgdata:/var/lib/postgresql/data
+
+  api:
+    build: .
+    environment:
+      FIXPOINT_ENV: mock
+      FIXPOINT_DB_URL: postgresql://fixpoint:fixpoint@postgres:5432/fixpoint
+      FIXPOINT_SIGNING_KEY: dev-only-change-me
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+
+volumes:
+  fixpoint_pgdata:
