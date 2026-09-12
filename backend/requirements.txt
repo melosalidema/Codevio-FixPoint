@@ -1,0 +1,9 @@
+# Fixpoint backend runtime dependencies.
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30
+pydantic>=2.8
+pydantic-settings>=2.4
+SQLAlchemy[asyncio]>=2.0.35
+asyncpg>=0.29
+aiosqlite>=0.20
+alembic>=1.13

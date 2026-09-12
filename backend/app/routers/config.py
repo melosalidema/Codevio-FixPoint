@@ -1,0 +1,25 @@
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from app.deps import AppSettings
+from app.schemas import ConfigResponse, EnvelopeOut
+
+router = APIRouter(prefix="/api", tags=["system"])
+
+
+@router.get("/config", response_model=ConfigResponse)
+async def config(settings: AppSettings) -> ConfigResponse:
+    """Public runtime configuration the console needs to render correctly.
+
+    The sealed envelope is exposed read-only so users can see the exact
+    numbers the gateway enforces.
+    """
+    envelope = settings.envelope
+    return ConfigResponse(
+        demo_mode=settings.demo_mode,
+        env=settings.env,
+        version=settings.version,
+        default_tenant_id=settings.default_tenant_id,
+        envelope=EnvelopeOut(**envelope.model_dump(exclude={"forbidden_ops"})),
+    )

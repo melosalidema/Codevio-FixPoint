@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -8,10 +9,22 @@ __pycache__/
 venv/
 env/
 
+# Databases
+*.db
+*.sqlite3
+backend/fixpoint.db
+
+# Node / frontend
+node_modules/
+frontend/dist/
+npm-debug.log*
+
+# Env
 .env
-*.env
+.env.*
 !.env.example
 
+# Tooling
 .coverage
 htmlcov/
 dist/

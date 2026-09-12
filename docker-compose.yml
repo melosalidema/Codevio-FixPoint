@@ -9,17 +9,25 @@ services:
       - "5432:5432"
     volumes:
       - fixpoint_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fixpoint -d fixpoint"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   api:
     build: .
     environment:
-      FIXPOINT_ENV: mock
-      FIXPOINT_DB_URL: postgresql://fixpoint:fixpoint@postgres:5432/fixpoint
+      FIXPOINT_ENV: development
+      FIXPOINT_DATABASE_URL: postgresql://fixpoint:fixpoint@postgres:5432/fixpoint
       FIXPOINT_SIGNING_KEY: dev-only-change-me
+      FIXPOINT_WEBHOOK_SECRET: dev-webhook-secret
+      FIXPOINT_DEMO_MODE: "true"
     ports:
       - "8000:8000"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
 volumes:
   fixpoint_pgdata:

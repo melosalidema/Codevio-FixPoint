@@ -1,72 +1,245 @@
 # Fixpoint
 
-An autonomous multi-app agent (billing, inbox, CRM, chat, docs) that resolves customer
-exceptions and **proves** it. The LLM only *proposes*; deterministic code authorizes, gates
-money behind a bound human approval, and an independent verifier re-reads real state before
-the agent is allowed to claim success.
+A multi-app agent (billing, inbox, CRM, chat, docs) that resolves customer exceptions and
+**proves** it. The LLM proposes; deterministic code authorizes; a human approves money; an
+independent verifier re-reads real state before the agent is allowed to claim success.
 
-This repository is the concrete FastAPI/Python build of `fixpoint-plan.html`.
+This repository is a production-ready build of `docs/fixpoint-plan.html`:
 
-The original design document lives in the repo at [`docs/fixpoint-plan.html`](docs/fixpoint-plan.html)
-(self-contained, no dependencies - open it in a browser or view it on GitHub Pages).
+- **Backend** — Python 3.11+, FastAPI, SQLAlchemy 2.0 (async), PostgreSQL, Alembic
+- **Frontend** — React 18, Vite, TypeScript, Tailwind CSS (dark run console + evaluation dashboard)
+- **Agent** — deterministic quarantine parser and planner (no external API keys, fully replayable)
+- **Safety core** — Action Gateway, HMAC approvals, hash-chained audit log, independent verifier
+- **Evaluation** — the S1–S16 security & reliability matrix with a PASS / FAIL / unsafe-blocked scoreboard
 
-## Layout
-
-```
-core/       deterministic safety layer (the product) - no network I/O
-  schemas.py      ProposedAction, RunContext, Envelope, ApprovalToken, reports
-  gateway.py      Action Gateway: deny-by-default policy enforcement point
-  approval.py     HMAC-signed, single-use, action-bound approval tokens
-  audit.py        append-only hash-chained audit log
-  canonical.py    action hashing + idempotency keys
-  webhooks.py     HMAC signature + replay protection
-adapters/   tenant-scoped provider clients (tenant injected from sealed context)
-twins/      resettable/seedable mock providers (Arga is NOT guaranteed)
-worker/     untrusted side: quarantine parser, planner, run engine, verifier
-api/        FastAPI control plane
-evals/      S1-S16 scenario matrix + PASS/FAIL/UNSAFE runner
-tests/      deterministic unit + end-to-end tests
-```
-
-## Run it
-
-```powershell
-# unit tests (deterministic core)
-python -m pytest -q
-
-# S1-S16 security/reliability matrix
-python -m evals.runner
-
-# control plane
-uvicorn api.main:app --reload
-# then open http://127.0.0.1:8000/docs
-```
-
-No secrets are required. Outputs use local twins; swap `twins/` for Arga by implementing the
-same methods behind `adapters/`.
+---
 
 ## Safety model
 
-- **Action Gateway** (`core/gateway.py`) is the only mutation path. Checks in order:
-  tool allow-list, capability grant, tenant binding, forbidden ops, data guard, field
-  allow-list, destination/charge pinning, velocity, idempotency, amount cap, approval tier.
-- **Approval tokens** are HMAC-signed and bound to one `action_hash`, amount, tenant, nonce
-  and expiry. Any post-approval change voids them (`S16`).
-- **Verifier** re-reads state and asserts required outcomes, forbidden side effects and
-  cross-system sync; ungrounded claims fail the run.
-- **Audit log** is append-only and hash-chained; tampering is detectable (`S12`).
+1. **Untrusted by default.** Request text, provider data and model output are data, never
+   instructions. The quarantine parser (tools disabled) turns text into strict facts and flags
+   injections.
+2. **Sealed context.** Tenant, actor, capabilities and the amount envelope are assembled
+   server-side in a `RunContext`. The model can never name a tenant or change authority.
+3. **Deny-by-default gateway.** The Action Gateway is the only mutation path. Checks run in a
+   fixed order: tool allow-list → capability grant → tenant binding → forbidden ops → data guard →
+   field allow-list → destination/charge pinning → velocity → idempotency → amount cap → approval.
+4. **Bound human approvals.** Money above the envelope pauses. The approval artifact is built from
+   source-of-truth provider state (never the model's narrative) and the token is HMAC-signed,
+   single-use, expiring, and bound to one `action_hash`. Any change voids it.
+5. **Independent verification.** After every mutation the verifier re-reads provider state and
+   asserts required outcomes, forbidden side effects and cross-system sync. Claims that cannot be
+   grounded fail the run — the agent never reports success it cannot prove.
+6. **Tamper-evident audit.** Every plan, proposal, gateway decision, tool call, mutation, approval
+   and verification is appended to a hash-chained ledger. Breaking one entry is detectable at the
+   exact index.
 
-## Envelope (approved plan numbers)
+Approval envelope (configurable via environment):
 
 | Amount | Behavior |
 | --- | --- |
-| <= $25 | autonomous |
-| <= $250 | team-lead approval |
-| <= $2,500 | finance approval |
+| ≤ $25 | autonomous |
+| ≤ $250 | team-lead approval |
+| ≤ $2,500 | finance approval |
 | > $2,500 or over cap | dual approval + separation of duties |
 
-## Definition of done
+---
 
-1. `python -m pytest -q` - all green.
-2. `python -m evals.runner` - 16/16 PASS, UNSAFE = 0.
-3. Two-minute demo: run, approve/deny, Stripe-500 retry, injected $2,000 blocked.
+## Architecture
+
+```
+request text ──▶ quarantine parser ──▶ planner ──▶ ProposedAction
+                                                        │
+                                       sealed RunContext ▼
+                                              ┌────────────────────┐
+                                              │   Action Gateway   │  deny-by-default
+                                              └─────────┬──────────┘
+                                    ALLOW               │            REQUIRE_APPROVAL / REJECT
+                        ┌───────────────────────────────┤            ┌──────────────────────┐
+                        ▼                               │            ▼                      ▼
+              tenant-scoped adapters                    │   approval artifact        unsafe-blocked
+                        │                               │   (human approves/denies)  audit entry
+                        ▼                               │            │
+              provider twins (Stripe, Gmail,            │            ▼
+              Slack, CRM, Drive) ───────────────────────┴──── bound, single-use token
+                        │
+                        ▼
+              independent verifier ──▶ hash-chained audit log ──▶ report
+```
+
+---
+
+## Repository layout
+
+```
+backend/
+  app/
+    agent/           parser, planner, run engine (untrusted side)
+    safety/          gateway, approval, audit, canonical, webhooks, verifier (the product)
+    providers/       resettable provider twins + tenant-scoped adapters
+    evals/           S1-S16 scenarios and runner
+    routers/         FastAPI routers (runs, scenarios, evals, webhooks, health, config)
+    repository/      database access layer
+    services/        run lifecycle orchestration + approval replay
+  alembic/           migrations (run automatically on container start)
+  tests/             50+ deterministic unit, API, DB and replay tests
+frontend/
+  src/               React console: Run Console, Evaluation, Runs, Run Detail, About
+Dockerfile           multi-stage: Node build -> Python runtime serving API + SPA
+railway.json         Railway deploy configuration (healthcheck /health)
+docker-compose.yml   local Postgres + API
+docs/                original design document
+```
+
+---
+
+## Quickstart
+
+### Option A — Docker (one command, includes Postgres)
+
+```bash
+docker compose up --build
+# open http://localhost:8000
+```
+
+The container runs Alembic migrations, then serves the API, the SPA and `/docs`.
+
+### Option B — local development
+
+Backend (SQLite by default, zero setup):
+
+```bash
+cd backend
+python -m venv .venv && . .venv/Scripts/activate   # Windows
+pip install -r requirements-dev.txt
+python -m alembic upgrade head
+python -m uvicorn app.main:app --reload --port 8000
+```
+
+Frontend (proxies `/api` and `/health` to port 8000):
+
+```bash
+cd frontend
+npm install
+npm run dev
+# open http://localhost:5173
+```
+
+### Tests and evaluations
+
+```bash
+cd backend
+python -m pytest -q          # 50+ tests
+python -m app.evals.runner   # S1-S16 matrix, 16/16 PASS expected
+python -m ruff check .       # lint
+```
+
+---
+
+## API reference
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Liveness + database probe (Railway healthcheck) |
+| `GET` | `/api/config` | Demo mode, envelope thresholds, version |
+| `POST` | `/api/runs` | Run the agent end to end; returns full timeline |
+| `GET` | `/api/runs` | Run history (persisted in Postgres) |
+| `GET` | `/api/runs/{id}` | Full run detail with verified audit chain |
+| `POST` | `/api/runs/{id}/approve` | Apply a bound human approval |
+| `POST` | `/api/runs/{id}/deny` | Deny the pending action; reconcile records |
+| `GET` | `/api/runs/{id}/audit` | Audit entries + chain verification |
+| `POST` | `/api/runs/{id}/audit/tamper` | Demo-only: break the chain to prove detection |
+| `GET` | `/api/scenarios` | List S1–S16 |
+| `POST` | `/api/scenarios/{id}/run` | Run one scenario |
+| `POST` | `/api/evals/run` | Run the full matrix and persist results |
+| `GET` | `/api/evals/results` | Latest stored batch (survives restarts) |
+| `POST` | `/api/webhooks/{provider}` | HMAC-verified, replay-protected webhooks |
+
+Interactive docs: `/docs`.
+
+---
+
+## Demo script (2 minutes)
+
+1. **Problem (0:15)** — one refund takes 20 minutes across five apps.
+2. **Benign run (1:00)** — submit the “Double charge” preset for **$42**:
+   investigation → gateway requires approval → facts and sealed action hash shown → approve →
+   idempotent refund + CRM note + Slack audit + Gmail draft (never sent) → verifier passes.
+3. **Recovery (0:20)** — tick **Inject Stripe 500**, run again: detect → retry with the same
+   idempotency key → exactly one refund exists.
+4. **Refusal (0:15)** — use **Injection $2,000**: refused by the gateway, logged as unsafe-blocked,
+   escalation artifact created, zero money moved.
+5. **Proof (0:10)** — Evaluation tab: 16/16 PASS, zero unsafe mutations, unused-blocked events
+   visible; press **Tamper** on the audit chain to show detection.
+
+---
+
+## Deploy to Railway
+
+1. Push this repository to GitHub.
+2. In Railway: **New Project → Deploy from GitHub repo** and pick the repository.
+   Railway reads `railway.json` and builds the `Dockerfile` (Node build stage + Python runtime).
+3. **Add PostgreSQL**: in the project canvas click **New → Database → PostgreSQL**.
+   Railway injects `DATABASE_URL` into the service; the app normalizes `postgres://` to the async
+   driver automatically.
+4. **Set service variables** (Settings → Variables):
+
+   | Variable | Value |
+   | --- | --- |
+   | `FIXPOINT_SIGNING_KEY` | strong random string (required) |
+   | `FIXPOINT_WEBHOOK_SECRET` | strong random string (required) |
+   | `FIXPOINT_ENV` | `production` |
+   | `FIXPOINT_DEMO_MODE` | `true` for the hackathon demo, `false` otherwise |
+
+   Generate secrets with `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+5. **Generate a domain**: Settings → Networking → Generate Domain.
+6. Open `https://<your-domain>/` — the console is served by the same service; `/health` is the
+   healthcheck and migrations run on every container start.
+
+Notes:
+
+- The server binds `0.0.0.0` and `$PORT` (see `backend/start.sh`); nothing is hardcoded.
+- Run a **single replica** (default). Run sessions are reconstructable from the database, but the
+  audit chain is appended per run and a single writer keeps the demo deterministic.
+- No secrets are committed; the image logs a warning when development defaults are in use.
+
+---
+
+## Environment variables
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DATABASE_URL` / `FIXPOINT_DATABASE_URL` | `sqlite+aiosqlite:///./fixpoint.db` | Async database URL (Railway injects `DATABASE_URL`) |
+| `FIXPOINT_ENV` | `development` | Environment label |
+| `FIXPOINT_SIGNING_KEY` | `dev-only-change-me` | HMAC key for approval tokens — **change in production** |
+| `FIXPOINT_WEBHOOK_SECRET` | `dev-webhook-secret` | HMAC key for provider webhooks — **change in production** |
+| `FIXPOINT_DEMO_MODE` | `true` | Enables the audit-tamper demo endpoint |
+| `FIXPOINT_MAX_REFUND_CENTS` | `250000` | Hard cap; above it escalation requires dual approval |
+| `FIXPOINT_AUTO_APPROVE_CENTS` | `2500` | Autonomous threshold |
+| `FIXPOINT_TEAM_LEAD_CENTS` | `25000` | Team-lead approval threshold |
+| `FIXPOINT_DUAL_APPROVAL_CENTS` | `250000` | Dual approval + separation-of-duties threshold |
+| `FIXPOINT_MAX_ACTIONS_PER_RUN` | `20` | Velocity limit per tool per run |
+| `FIXPOINT_DEFAULT_TENANT_ID` | `t_123` | Session stand-in until auth is added |
+| `FIXPOINT_DEFAULT_ACTOR_USER_ID` | `u_88` | Session stand-in until auth is added |
+| `FIXPOINT_CORS_ORIGINS` | `http://localhost:5173,...` | Dev-server CORS (production is same-origin) |
+| `FIXPOINT_STATIC_DIR` | empty | Built SPA directory (set in the Docker image) |
+
+---
+
+## Production roadmap
+
+Explicitly out of scope for this hackathon build, and the first things to add next:
+
+- Authentication and user management; tenant identity from the session, not a stand-in
+- A real per-tenant secret vault (envelope encryption, rotation, short-lived provider tokens)
+- Postgres row-level security and per-tenant repository filters
+- Real provider clients behind the existing adapter interface (Stripe, Gmail, Slack, HubSpot, Drive)
+- An LLM-backed quarantine parser + planner behind the same deterministic gateway (fallback to the
+  scripted planner when the model is unavailable)
+- Lemma tracing per run and cost/latency charts
+- A fifth app (Notion or Linear) and dispute evidence packet generation
+
+---
+
+Built for the Multi-App AI Agent Hackathon 2026. The original design document lives at
+[`docs/fixpoint-plan.html`](docs/fixpoint-plan.html).

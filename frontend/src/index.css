@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  @apply bg-slate-950 text-slate-100;
+  background-image:
+    radial-gradient(60rem 30rem at 15% -10%, rgb(79 70 229 / 0.16), transparent 60%),
+    radial-gradient(50rem 25rem at 90% -20%, rgb(16 185 129 / 0.08), transparent 55%);
+  background-attachment: fixed;
+}
+
+/* Visible keyboard focus everywhere. */
+:focus-visible {
+  @apply outline-none ring-2 ring-indigo-400/80 ring-offset-2 ring-offset-slate-950;
+}
+
+/* Subtle custom scrollbar for long timelines. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(51 65 85) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-slate-700;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-xl border border-slate-800/80 bg-slate-900/60 shadow-panel backdrop-blur-sm;
+  }
+  .panel-head {
+    @apply flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/70 px-4 py-3;
+  }
+  .panel-title {
+    @apply text-sm font-semibold uppercase tracking-wider text-slate-300;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition
+      disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-indigo-600 text-white hover:bg-indigo-500 active:bg-indigo-700;
+  }
+  .btn-success {
+    @apply btn bg-emerald-600 text-white hover:bg-emerald-500 active:bg-emerald-700;
+  }
+  .btn-danger {
+    @apply btn bg-rose-600 text-white hover:bg-rose-500 active:bg-rose-700;
+  }
+  .btn-ghost {
+    @apply btn border border-slate-700 bg-slate-900/60 text-slate-200 hover:border-slate-500 hover:bg-slate-800;
+  }
+  .input {
+    @apply w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-100
+      placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none;
+  }
+  .code {
+    @apply rounded bg-slate-950/80 px-1.5 py-0.5 font-mono text-[12px] text-indigo-200;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1
+      text-xs font-medium text-slate-300 transition hover:border-indigo-500/70 hover:text-white;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
