@@ -40,6 +40,8 @@ class ConfigResponse(BaseModel):
     env: str
     version: str
     default_tenant_id: str
+    llm_enabled: bool = False
+    provider_backend: str = "twin"
     envelope: EnvelopeOut
 
 
@@ -63,6 +65,9 @@ class RunDetail(BaseModel):
     approval_artifact: dict[str, Any] | None = None
     world_before: dict[str, Any] | None = None
     world_after: dict[str, Any] | None = None
+    planner_source: str = "deterministic"
+    provider_backend: str = "twin"
+    planner_meta: dict[str, Any] | None = None
     audit: AuditResponse
 
 

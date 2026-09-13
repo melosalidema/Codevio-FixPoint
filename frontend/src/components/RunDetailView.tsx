@@ -15,6 +15,15 @@ function SummaryGrid({ run }: { run: RunDetail }) {
     { label: "Status", value: <StatusPill status={run.status} /> },
     { label: "Outcome", value: <span className="text-sm">{run.outcome || "-"}</span> },
     { label: "Verified", value: <StatusPill status={run.verified ? "verified" : "failed"} /> },
+    {
+      label: "Planner",
+      value: (
+        <span className="text-sm">
+          <code className="code">{run.planner_source}</code>{" "}
+          <span className="text-xs text-slate-500">/ {run.provider_backend}</span>
+        </span>
+      ),
+    },
     { label: "Created", value: <span className="text-xs text-slate-400">{when(run.created_at)}</span> },
   ];
   return (

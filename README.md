@@ -8,7 +8,11 @@ This repository is a production-ready build of `docs/fixpoint-plan.html`:
 
 - **Backend** — Python 3.11+, FastAPI, SQLAlchemy 2.0 (async), PostgreSQL, Alembic
 - **Frontend** — React 18, Vite, TypeScript, Tailwind CSS (dark run console + evaluation dashboard)
-- **Agent** — deterministic quarantine parser and planner (no external API keys, fully replayable)
+- **Agent** — deterministic quarantine parser and planner by default, plus an optional LLM planner
+  (OpenAI-compatible) behind the same gateway. Every LLM error falls back to the deterministic
+  planner, so runs stay replayable with no API key required.
+- **Providers** — in-process deterministic twins by default, or Arga digital twins over HTTP for
+  Stripe, Gmail, Slack, HubSpot and Google Drive (`FIXPOINT_PROVIDER_BACKEND=arga`).
 - **Safety core** — Action Gateway, HMAC approvals, hash-chained audit log, independent verifier
 - **Evaluation** — the S1–S16 security & reliability matrix with a PASS / FAIL / unsafe-blocked scoreboard
 
@@ -74,15 +78,16 @@ request text ──▶ quarantine parser ──▶ planner ──▶ ProposedAct
 ```
 backend/
   app/
-    agent/           parser, planner, run engine (untrusted side)
+    agent/           parser, planner, LLM planner + fallback, run engine (untrusted side)
     safety/          gateway, approval, audit, canonical, webhooks, verifier (the product)
-    providers/       resettable provider twins + tenant-scoped adapters
+    providers/       in-process twins, Arga digital-twin backend, tenant-scoped adapters
     evals/           S1-S16 scenarios and runner
     routers/         FastAPI routers (runs, scenarios, evals, webhooks, health, config)
     repository/      database access layer
-    services/        run lifecycle orchestration + approval replay
+    services/        run lifecycle orchestration + committed-plan approval replay
+  scripts/           arga_provision.py (provision Arga twins, emit env)
   alembic/           migrations (run automatically on container start)
-  tests/             50+ deterministic unit, API, DB and replay tests
+  tests/             60+ deterministic unit, API, DB, replay and adapter tests
 frontend/
   src/               React console: Run Console, Evaluation, Runs, Run Detail, About
 Dockerfile           multi-stage: Node build -> Python runtime serving API + SPA
@@ -129,7 +134,7 @@ npm run dev
 
 ```bash
 cd backend
-python -m pytest -q          # 50+ tests
+python -m pytest -q          # 60+ tests
 python -m app.evals.runner   # S1-S16 matrix, 16/16 PASS expected
 python -m ruff check .       # lint
 ```
@@ -169,7 +174,7 @@ Interactive docs: `/docs`.
    idempotency key → exactly one refund exists.
 4. **Refusal (0:15)** — use **Injection $2,000**: refused by the gateway, logged as unsafe-blocked,
    escalation artifact created, zero money moved.
-5. **Proof (0:10)** — Evaluation tab: 16/16 PASS, zero unsafe mutations, unused-blocked events
+5. **Proof (0:10)** — Evaluation tab: 16/16 PASS, zero unsafe mutations, unsafe-blocked events
    visible; press **Tamper** on the audit chain to show detection.
 
 ---
@@ -221,6 +226,13 @@ Notes:
 | `FIXPOINT_MAX_ACTIONS_PER_RUN` | `20` | Velocity limit per tool per run |
 | `FIXPOINT_DEFAULT_TENANT_ID` | `t_123` | Session stand-in until auth is added |
 | `FIXPOINT_DEFAULT_ACTOR_USER_ID` | `u_88` | Session stand-in until auth is added |
+| `FIXPOINT_LLM_ENABLED` | `false` | Enable the optional LLM parser/planner (falls back on any error) |
+| `FIXPOINT_LLM_BASE_URL` | empty | OpenAI-compatible base URL (e.g. `https://api.openai.com/v1`) |
+| `FIXPOINT_LLM_API_KEY` | empty | API key for the LLM endpoint |
+| `FIXPOINT_LLM_MODEL` | empty | Model name (e.g. `gpt-4o-mini`) |
+| `FIXPOINT_LLM_TIMEOUT_SECONDS` | `20` | Model call timeout before fallback |
+| `FIXPOINT_PROVIDER_BACKEND` | `twin` | `twin` (in-process) or `arga` (digital twins over HTTP) |
+| `FIXPOINT_ARGA_*_URL` / `_TOKEN` | empty | Per-service Arga twin endpoints (Stripe, Gmail, Slack, HubSpot, Drive) |
 | `FIXPOINT_CORS_ORIGINS` | `http://localhost:5173,...` | Dev-server CORS (production is same-origin) |
 | `FIXPOINT_STATIC_DIR` | empty | Built SPA directory (set in the Docker image) |
 
@@ -233,10 +245,8 @@ Explicitly out of scope for this hackathon build, and the first things to add ne
 - Authentication and user management; tenant identity from the session, not a stand-in
 - A real per-tenant secret vault (envelope encryption, rotation, short-lived provider tokens)
 - Postgres row-level security and per-tenant repository filters
-- Real provider clients behind the existing adapter interface (Stripe, Gmail, Slack, HubSpot, Drive)
-- An LLM-backed quarantine parser + planner behind the same deterministic gateway (fallback to the
-  scripted planner when the model is unavailable)
-- Lemma tracing per run and cost/latency charts
+- Hardening the Arga backend into the default for every environment (seed + reset automation)
+- Lemma tracing per run and cost/latency charts for the LLM planner
 - A fifth app (Notion or Linear) and dispute evidence packet generation
 
 ---

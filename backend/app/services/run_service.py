@@ -7,12 +7,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.engine import RunSession
+from app.agent.hybrid import build_hybrid, source_label
+from app.agent.parser import parse
 from app.config import get_settings
 from app.models import Run, RunEvent
-from app.providers.world import World
+from app.providers.factory import build_backend
 from app.repository import runs as repo
 from app.safety.audit import verify_entries
-from app.safety.models import RunContext
+from app.safety.models import ParsedFacts, ProposedAction, RunContext
 from app.schemas import RunCreateRequest
 
 # Capabilities granted to every run. The client cannot change these.
@@ -64,6 +66,14 @@ def _entries_json(session: RunSession) -> list[dict[str, Any]]:
     return [entry.model_dump(mode="json") for entry in session.audit_log.entries]
 
 
+def _facts_payload(session: RunSession) -> dict[str, Any] | None:
+    return session.facts.model_dump(mode="json") if session.facts else None
+
+
+def _action_payload(session: RunSession) -> dict[str, Any] | None:
+    return session.proposed.model_dump(mode="json") if session.proposed else None
+
+
 def _detail(
     *,
     run_id: str,
@@ -82,6 +92,9 @@ def _detail(
     chain_ok: bool,
     chain_reason: str,
     entries: list[dict[str, Any]],
+    planner_source: str = "deterministic",
+    provider_backend: str = "twin",
+    planner_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "run_id": run_id,
@@ -97,6 +110,9 @@ def _detail(
         "approval_artifact": artifact,
         "world_before": world_before,
         "world_after": world_after,
+        "planner_source": planner_source,
+        "provider_backend": provider_backend,
+        "planner_meta": planner_meta,
         "audit": {"chain_ok": chain_ok, "reason": chain_reason, "entries": entries},
     }
 
@@ -129,6 +145,9 @@ def session_detail(
         chain_ok=chain_ok,
         chain_reason=chain_reason,
         entries=_entries_json(session),
+        planner_source=getattr(session, "planner_source", "deterministic"),
+        provider_backend=getattr(session, "provider_backend", "twin"),
+        planner_meta=getattr(session, "planner_meta", None),
     )
 
 
@@ -153,6 +172,9 @@ async def detail_from_db(db: AsyncSession, row: Run) -> dict[str, Any]:
         chain_ok=chain_ok,
         chain_reason=chain_reason,
         entries=[entry.model_dump(mode="json") for entry in entries],
+        planner_source=row.planner_source or "deterministic",
+        provider_backend=row.provider_backend or "twin",
+        planner_meta=row.planner_meta,
     )
 
 
@@ -172,12 +194,22 @@ async def create_run(db: AsyncSession, body: RunCreateRequest) -> dict[str, Any]
         envelope=settings.envelope,
     )
     seed = seed_for(tenant_id, body.amount_cents, body.duplicate_customer)
-    world = World(seed)
+    world = build_backend(settings, seed)
     world.stripe.fail_refund_remaining = body.stripe_refund_failures
     world_before = world.snapshot()
 
-    session = RunSession(world, ctx, body.request_text, policy_file_id=body.policy_file_id)
+    parser, planner = build_hybrid(settings)
+    session = RunSession(
+        world,
+        ctx,
+        body.request_text,
+        policy_file_id=body.policy_file_id,
+        parser_fn=parser,
+        planner_fn=planner,
+    )
     session.run()
+    session.planner_source = source_label(parser, planner)
+    session.planner_meta = planner.meta or {}
 
     row = await repo.create_run_row(
         db,
@@ -192,22 +224,28 @@ async def create_run(db: AsyncSession, body: RunCreateRequest) -> dict[str, Any]
         duplicate_customer=body.duplicate_customer,
         stripe_refund_failures=body.stripe_refund_failures,
         seed=seed,
+        parsed_facts=_facts_payload(session),
+        proposed_action=_action_payload(session),
+        planner_source=session.planner_source,
+        provider_backend=settings.provider_backend,
+        planner_meta=session.planner_meta,
     )
     await repo.persist_session(db, row, session, world_before, world.snapshot())
     await db.commit()
     return session_detail(row, session, world_before, world.snapshot())
 
 
-def replay_session(row: Run) -> tuple[RunSession, World]:
-    """Rebuild a run deterministically from its persisted seed.
+def replay_session(row: Run) -> tuple[RunSession, Any]:
+    """Rebuild a run from its persisted committed plan.
 
-    The engine performs no external I/O, so replaying ``run()`` recreates the
-    exact audit chain and the pending approval artifact. This is what makes
-    approval safe across process restarts.
+    The engine is fed the facts and action that were stored at creation time,
+    so the rebuilt audit chain is identical to the persisted one. This is what
+    makes approval safe across restarts even when the planner is an LLM (whose
+    output is not reproducible) or the providers are external.
     """
     settings = get_settings()
     seed = row.seed or {}
-    world = World(seed)
+    world = build_backend(settings, seed)
     world.stripe.fail_refund_remaining = row.stripe_refund_failures
     ctx = RunContext(
         run_id=row.id,
@@ -217,8 +255,16 @@ def replay_session(row: Run) -> tuple[RunSession, World]:
         capabilities=list(row.capabilities or DEFAULT_CAPABILITIES),
         envelope=settings.envelope,
     )
-    session = RunSession(world, ctx, row.request_text, policy_file_id=row.policy_file_id)
-    session.run()
+    facts = ParsedFacts(**row.parsed_facts) if row.parsed_facts else parse(row.request_text)
+    action = ProposedAction(**row.proposed_action) if row.proposed_action else None
+    session = RunSession(
+        world,
+        ctx,
+        row.request_text,
+        policy_file_id=row.policy_file_id,
+        planner_source=row.planner_source or "deterministic",
+    )
+    session.replay_committed(facts, action)
     return session, world
 
 

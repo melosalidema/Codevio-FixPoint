@@ -21,5 +21,7 @@ async def config(settings: AppSettings) -> ConfigResponse:
         env=settings.env,
         version=settings.version,
         default_tenant_id=settings.default_tenant_id,
+        llm_enabled=settings.llm_enabled and settings.llm_configured,
+        provider_backend=settings.provider_backend,
         envelope=EnvelopeOut(**envelope.model_dump(exclude={"forbidden_ops"})),
     )

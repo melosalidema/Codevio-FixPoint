@@ -41,6 +41,11 @@ async def create_run_row(
     duplicate_customer: bool,
     stripe_refund_failures: int,
     seed: dict[str, Any],
+    parsed_facts: dict[str, Any] | None = None,
+    proposed_action: dict[str, Any] | None = None,
+    planner_source: str = "deterministic",
+    provider_backend: str = "twin",
+    planner_meta: dict[str, Any] | None = None,
 ) -> Run:
     row = Run(
         id=run_id,
@@ -54,6 +59,11 @@ async def create_run_row(
         duplicate_customer=duplicate_customer,
         stripe_refund_failures=stripe_refund_failures,
         seed=jsonable(seed),
+        parsed_facts=jsonable(parsed_facts) if parsed_facts is not None else None,
+        proposed_action=jsonable(proposed_action) if proposed_action is not None else None,
+        planner_source=planner_source,
+        provider_backend=provider_backend,
+        planner_meta=jsonable(planner_meta) if planner_meta is not None else None,
     )
     db.add(row)
     await db.flush()
@@ -83,6 +93,16 @@ async def persist_session(
     verification = getattr(session, "verification", None)
     row.verification = verification.model_dump(mode="json") if verification else None
     row.approval_artifact = session.artifact.model_dump(mode="json") if session.artifact else None
+    facts = getattr(session, "facts", None)
+    if facts is not None:
+        row.parsed_facts = jsonable(facts.model_dump(mode="json"))
+    if session.proposed is not None:
+        row.proposed_action = jsonable(session.proposed.model_dump(mode="json"))
+    if getattr(session, "planner_source", None):
+        row.planner_source = session.planner_source
+    meta = getattr(session, "planner_meta", None)
+    if meta is not None:
+        row.planner_meta = jsonable(meta)
     if world_before is not None:
         row.world_before = jsonable(world_before)
     row.world_after = jsonable(world_after) if world_after is not None else None

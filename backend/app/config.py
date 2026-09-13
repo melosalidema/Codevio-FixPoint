@@ -64,6 +64,44 @@ class Settings(BaseSettings):
     default_tenant_id: str = "t_123"
     default_actor_user_id: str = "u_88"
 
+    # Optional LLM planner. When disabled (default) the deterministic parser and
+    # planner are used: fully offline and replayable. When enabled, the model
+    # only proposes; the deterministic Action Gateway still authorizes, and any
+    # LLM error falls back to the deterministic planner.
+    llm_enabled: bool = False
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+    llm_timeout_seconds: float = 20.0
+
+    # Provider backend: "twin" (in-process deterministic twins, default) or
+    # "arga" (Arga digital twins over HTTP).
+    provider_backend: str = "twin"
+    arga_base_url: str = ""
+    arga_stripe_url: str = ""
+    arga_stripe_token: str = ""
+    arga_gmail_url: str = ""
+    arga_gmail_token: str = ""
+    arga_slack_url: str = ""
+    arga_slack_token: str = ""
+    arga_hubspot_url: str = ""
+    arga_hubspot_token: str = ""
+    arga_drive_url: str = ""
+    arga_drive_token: str = ""
+
+    @property
+    def llm_configured(self) -> bool:
+        return bool(self.llm_base_url and self.llm_api_key and self.llm_model)
+
+    @property
+    def arga_configured(self) -> bool:
+        return bool(
+            self.provider_backend == "arga"
+            and self.arga_stripe_url
+            and self.arga_gmail_url
+            and self.arga_slack_url
+        )
+
     @field_validator("database_url", mode="after")
     @classmethod
     def _normalize_database_url(cls, value: str) -> str:

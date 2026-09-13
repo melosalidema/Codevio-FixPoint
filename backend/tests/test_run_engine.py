@@ -120,3 +120,31 @@ def test_replay_recreates_identical_audit_chain():
     hashes_a = [entry.hash for entry in session_a.audit_log.entries]
     hashes_b = [entry.hash for entry in session_b.audit_log.entries]
     assert hashes_a == hashes_b
+
+
+def test_replay_committed_matches_chain_and_binds_approval():
+    """The persisted committed plan reproduces the chain and unlocks approval.
+
+    This is the guarantee that lets the planner be non-deterministic (LLM).
+    """
+    world_a = World(SEED)
+    session_a = RunSession(
+        world_a, make_ctx("r7"), "I was double charged, please refund the duplicate for jane@acme.com"
+    )
+    session_a.run()
+    assert session_a.proposed is not None
+
+    world_b = World(SEED)
+    session_b = RunSession(
+        world_b, make_ctx("r7"), "I was double charged, please refund the duplicate for jane@acme.com"
+    )
+    session_b.replay_committed(session_a.facts, session_a.proposed)
+
+    hashes_a = [entry.hash for entry in session_a.audit_log.entries]
+    hashes_b = [entry.hash for entry in session_b.audit_log.entries]
+    assert hashes_a == hashes_b
+
+    final = session_b.approve("team_lead", "u_99")
+    assert final.status == "completed"
+    assert final.verified
+    assert sum(c.refunded_cents for c in world_b.charges.values()) == 4200

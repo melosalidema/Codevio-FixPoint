@@ -15,6 +15,7 @@ from app.safety.models import (
     Decision,
     GatewayState,
     LedgerType,
+    ParsedFacts,
     ProposedAction,
     RunContext,
     RunReport,
@@ -22,6 +23,7 @@ from app.safety.models import (
 from app.safety.verifier import Intent, verify
 
 PlannerFn = Callable[[Any, Resolution, RunContext], ProposedAction | None]
+ParserFn = Callable[[str], ParsedFacts]
 
 
 class RunSession:
@@ -40,12 +42,16 @@ class RunSession:
         request_text: str,
         policy_file_id: str | None = None,
         planner_fn: PlannerFn | None = None,
+        parser_fn: ParserFn | None = None,
+        planner_source: str = "deterministic",
     ) -> None:
         self.world = world
         self.ctx = ctx
         self.request_text = request_text
         self.policy_file_id = policy_file_id
         self.planner_fn = planner_fn or planner_module.propose
+        self.parser_fn = parser_fn or parse
+        self.planner_source = planner_source
         self.adapter = AdapterSet(world, ctx)
         self.state = GatewayState()
         self.facts = None
@@ -75,9 +81,9 @@ class RunSession:
         self.audit_log.append(self.ctx.run_id, entry_type, payload)
 
     # ----------------------------------------------------------- investigation
-    def _investigate(self) -> None:
+    def _investigate(self, facts: ParsedFacts) -> None:
         """Resolve the request against authoritative provider state."""
-        self.facts = parse(self.request_text)
+        self.facts = facts
         email = self.facts.customer_email
         customers = self.adapter.resolve_customer(email=email)
         contacts = self.adapter.crm_contacts(email=email)
@@ -128,8 +134,21 @@ class RunSession:
                 self._create_artifact(decision, escalate=True)
 
     def run(self) -> RunReport:
-        self._investigate()
-        self.proposed = self.planner_fn(self.facts, self.resolution, self.ctx)
+        facts = self.parser_fn(self.request_text)
+        return self._run_with(facts, self.planner_fn)
+
+    def replay_committed(self, facts: ParsedFacts, action: ProposedAction | None) -> RunReport:
+        """Replay a run using the plan that was committed originally.
+
+        This does not call the parser or planner, so the rebuilt audit chain is
+        byte-identical to the stored one. That keeps approval binding valid and
+        lets approve/deny run against the exact same action after a restart.
+        """
+        return self._run_with(facts, lambda *_: action)
+
+    def _run_with(self, facts: ParsedFacts, planner_fn: PlannerFn) -> RunReport:
+        self._investigate(facts)
+        self.proposed = planner_fn(self.facts, self.resolution, self.ctx)
         if self.proposed is None:
             self.status = "failed"
             self._audit_log_append(LedgerType.PROPOSAL, {"action": None, "reason": "no_actionable_remedy"})

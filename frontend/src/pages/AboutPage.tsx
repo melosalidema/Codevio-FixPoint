@@ -5,7 +5,7 @@ import { usd } from "../lib/format";
 const PIPELINE = [
   ["1. Untrusted content", "Email, CRM notes, Slack and Drive are treated strictly as data. Instructions inside are flagged, never executed."],
   ["2. Quarantine parser", "Converts text into strict structured facts. Tools disabled — an injection here cannot act."],
-  ["3. Planner", "Proposes one action at a time. It has no execution authority; it can only propose."],
+  ["3. Planner", "Deterministic by default, or an LLM when configured. It proposes one action at a time and has no execution authority; any model error falls back to the deterministic planner."],
   ["4. Sealed RunContext", "Tenant, actor, capabilities and envelope are injected server-side and cannot be named by the model."],
   ["5. Action Gateway", "Deny-by-default policy enforcement. Tool allow-list, tenant binding, field allow-list, destination pinning, idempotency, velocity, amount tiers."],
   ["6. Human approval", "Over-envelope or flagged actions pause for a bound, single-use, HMAC-signed approval token."],

@@ -100,6 +100,9 @@ export interface RunDetail {
   approval_artifact: ApprovalArtifact | null;
   world_before: WorldSnapshot | null;
   world_after: WorldSnapshot | null;
+  planner_source: string;
+  provider_backend: string;
+  planner_meta: Record<string, unknown> | null;
   audit: AuditResponse;
 }
 
@@ -128,6 +131,8 @@ export interface ConfigResponse {
   env: string;
   version: string;
   default_tenant_id: string;
+  llm_enabled: boolean;
+  provider_backend: string;
   envelope: Envelope;
 }
 

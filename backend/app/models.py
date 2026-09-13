@@ -47,6 +47,16 @@ class Run(Base):
     stripe_refund_failures: Mapped[int] = mapped_column(Integer, default=0)
     seed: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
+    # The committed plan. Facts and the proposed action are persisted so that
+    # approve/deny can replay the exact same audit chain instead of re-planning.
+    # This is what makes the planner safely replaceable (LLM or deterministic)
+    # and keeps approval binding stable across restarts.
+    parsed_facts: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    proposed_action: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    planner_source: Mapped[str] = mapped_column(String(32), default="deterministic")
+    provider_backend: Mapped[str] = mapped_column(String(32), default="twin")
+    planner_meta: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
     # Outcome.
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     outcome: Mapped[str] = mapped_column(String(64), default="")
