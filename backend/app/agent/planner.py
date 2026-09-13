@@ -16,10 +16,17 @@ class Resolution:
     policy: dict[str, Any] | None = None
     duplicate_charge_ids: list[str] = field(default_factory=list)
     subscriptions: list[dict[str, Any]] = field(default_factory=list)
+    crm_contacts: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def ambiguous(self) -> bool:
-        return len(self.customers) > 1
+        """Identity is ambiguous when either system has multiple matches.
+
+        The engine escalates instead of guessing; this is provider-independent
+        and applies equally to duplicate Stripe customers and duplicate CRM
+        contacts.
+        """
+        return len(self.customers) > 1 or len(self.crm_contacts) > 1
 
     @property
     def resolved_customer(self) -> dict[str, Any] | None:

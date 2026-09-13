@@ -44,6 +44,7 @@ class RunSession:
         planner_fn: PlannerFn | None = None,
         parser_fn: ParserFn | None = None,
         planner_source: str = "deterministic",
+        crm_refund_status: str = "",
     ) -> None:
         self.world = world
         self.ctx = ctx
@@ -52,6 +53,7 @@ class RunSession:
         self.planner_fn = planner_fn or planner_module.propose
         self.parser_fn = parser_fn or parse
         self.planner_source = planner_source
+        self.crm_refund_status = crm_refund_status
         self.adapter = AdapterSet(world, ctx)
         self.state = GatewayState()
         self.facts = None
@@ -65,6 +67,7 @@ class RunSession:
         self.report: RunReport | None = None
         self.tool_errors: list[str] = []
         self.world_before: dict[str, Any] | None = None
+        self.prior_refunded_cents: dict[str, int] = {}
         self._reset_intent()
 
     def _reset_intent(self) -> None:
@@ -110,6 +113,7 @@ class RunSession:
             policy=policy,
             duplicate_charge_ids=duplicates,
             subscriptions=subscriptions,
+            crm_contacts=contacts,
         )
 
         # Pin the charges and destinations this run may touch. The gateway
@@ -160,8 +164,13 @@ class RunSession:
         self._investigate(facts)
         # Capture provider state after evidence gathering and before any
         # execution. For live providers this is the real pre-mutation state;
-        # a pre-investigation snapshot would be empty/stale.
+        # a pre-investigation snapshot would be empty/stale. The refunded
+        # totals are what the verifier compares against to ignore history.
         self.world_before = self.world.snapshot() if hasattr(self.world, "snapshot") else None
+        self.prior_refunded_cents = {
+            cid: int(charge.get("refunded_cents", 0))
+            for cid, charge in ((self.world_before or {}).get("charges") or {}).items()
+        }
         self.proposed = planner_fn(self.facts, self.resolution, self.ctx)
         if self.proposed is None:
             self.status = "failed"
@@ -273,6 +282,7 @@ class RunSession:
                 "customers": self.resolution.customers,
                 "charges": self.resolution.charges,
                 "subscriptions": self.resolution.subscriptions,
+                "crm_contacts": self.resolution.crm_contacts,
                 "policy_hash": (self.resolution.policy or {}).get("hash"),
             },
             untrusted_justification=self.proposed.justification,
@@ -305,6 +315,8 @@ class RunSession:
         self.intent = Intent(
             expected_refund_charge=self.proposed.params.get("charge_id"),
             expected_refund_cents=int(self.proposed.params.get("amount_cents", 0)),
+            expected_contact_id=(self.resolution.contact or {}).get("id"),
+            prior_refunded_cents=dict(self.prior_refunded_cents),
             expect_no_mutation=False,
             expect_sync=True,
         )
@@ -330,6 +342,27 @@ class RunSession:
                 )
             except ProviderError:
                 pass
+            if self.crm_refund_status:
+                try:
+                    self.adapter.execute(
+                        ProposedAction(
+                            tool="crm.update",
+                            params={
+                                "contact_id": contact["id"],
+                                "status": self.crm_refund_status,
+                            },
+                        )
+                    )
+                    self._audit_log_append(
+                        LedgerType.TOOL_CALL,
+                        {
+                            "tool": "crm.update",
+                            "contact_id": contact["id"],
+                            "status": self.crm_refund_status,
+                        },
+                    )
+                except ProviderError:
+                    pass
         try:
             self.adapter.execute(
                 ProposedAction(
@@ -376,7 +409,10 @@ class RunSession:
     ) -> RunReport:
         if expect_no_mutation:
             self.intent = Intent(
-                expected_refund_charge=None, expected_refund_cents=0, expect_no_mutation=True
+                expected_refund_charge=None,
+                expected_refund_cents=0,
+                prior_refunded_cents=dict(self.prior_refunded_cents),
+                expect_no_mutation=True,
             )
         verification = verify(self.world, self.ctx, self.intent, self.executed_tools)
         self._audit_log_append(LedgerType.VERIFICATION, verification.model_dump())
@@ -435,6 +471,11 @@ class RunSession:
                 (grounded if checks.get("required_outcome") else ungrounded).append(claim)
             elif claim == "no refund was executed":
                 (grounded if checks.get("no_mutation") else ungrounded).append(claim)
+            elif claim == "crm note added":
+                # Ground the CRM claim on the per-contact check when the run
+                # pinned a contact; otherwise fall back to the aggregate sync.
+                key = "crm_note_recorded" if "crm_note_recorded" in checks else "cross_system_sync"
+                (grounded if checks.get(key) else ungrounded).append(claim)
             else:
                 (grounded if checks.get("cross_system_sync") else ungrounded).append(claim)
         return grounded, ungrounded

@@ -55,6 +55,21 @@ class RefundRecord:
 
 
 @dataclass
+class NoteRecord:
+    """One CRM note associated with one contact.
+
+    Kept provider-agnostic so the verifier can assert that the expected run note
+    exists on the pinned contact for the twin, Arga and live HubSpot alike.
+    """
+
+    id: str
+    contact_id: str
+    body: str
+    tenant_id: str
+    created: int | None = None
+
+
+@dataclass
 class Contact:
     id: str
     email: str
@@ -273,6 +288,16 @@ class CrmTwin:
             raise ProviderError("hubspot", 404, "contact not found")
         contact.notes.append(body)
         return contact
+
+    def list_notes(self, tenant_id: str, contact_id: str) -> list[NoteRecord]:
+        """Notes associated with one contact (twin ledger; fresh by design)."""
+        contact = self._world.contacts.get(contact_id)
+        if contact is None or contact.tenant_id != tenant_id:
+            raise ProviderError("hubspot", 404, "contact not found")
+        return [
+            NoteRecord(id=f"note_{index:04d}", contact_id=contact_id, body=body, tenant_id=tenant_id)
+            for index, body in enumerate(contact.notes, start=1)
+        ]
 
     def update_status(self, tenant_id: str, contact_id: str, status: str) -> Contact:
         contact = self._world.contacts.get(contact_id)

@@ -26,6 +26,8 @@ def _hermetic_providers(monkeypatch):
     """
     monkeypatch.setenv("FIXPOINT_NOTIFY_FORMSPREE_ENABLED", "false")
     monkeypatch.setenv("FIXPOINT_STRIPE_BACKEND", "twin")
+    monkeypatch.setenv("FIXPOINT_CRM_BACKEND", "twin")
+    monkeypatch.setenv("FIXPOINT_HUBSPOT_REFUND_STATUS", "")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

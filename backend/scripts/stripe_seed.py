@@ -110,17 +110,25 @@ def _seed_charges(client: SeedClient, customer_id: str, amount_cents: int) -> li
         "/v1/charges",
         params={"customer": customer_id, "limit": 100},
     )
-    charges = [
+    seed_rows = [
         row
         for row in body.get("data", [])
         if (row.get("metadata") or {}).get(SEED_TAG) == "true"
         and int(row.get("amount", 0)) == amount_cents
     ]
-    charge_ids = [str(row["id"]) for row in charges]
+    # Only untouched charges can demonstrate a full refund cleanly, so any
+    # charge with prior refunds is replaced rather than reused.
+    suitable = [
+        row
+        for row in seed_rows
+        if not row.get("refunded") and int(row.get("amount_refunded", 0)) == 0
+    ]
+    charge_ids = [str(row["id"]) for row in suitable]
     created: list[str] = []
-    index = len(charge_ids)
+    # Version the idempotency key off every seed charge ever created for this
+    # amount so replacing a refunded charge never reuses its Stripe key.
+    next_version = len(seed_rows) + 1
     while len(charge_ids) + len(created) < 2:
-        index += 1
         intent = client.request(
             "POST",
             "/v1/payment_intents",
@@ -131,11 +139,14 @@ def _seed_charges(client: SeedClient, customer_id: str, amount_cents: int) -> li
                 "payment_method": "pm_card_visa",
                 "confirm": "true",
                 "payment_method_types[0]": "card",
-                "description": f"Fixpoint demo charge {index}",
+                "description": f"Fixpoint demo charge {next_version}",
                 f"metadata[{SEED_TAG}]": "true",
             },
-            idempotency_key=f"fixpoint-seed-charge-{customer_id}-{index}-{amount_cents}-card",
+            idempotency_key=(
+                f"fixpoint-seed-charge-{customer_id}-{amount_cents}-v{next_version}"
+            ),
         )
+        next_version += 1
         charge_id = str(intent.get("latest_charge") or "")
         if not charge_id:
             raise SeedError(f"PaymentIntent {intent.get('id')} produced no charge")

@@ -33,6 +33,19 @@ class AdapterSet:
             for c in contacts
         ]
 
+    def list_notes(self, contact_id: str) -> list[dict[str, Any]]:
+        """Notes associated with one contact (fresh read for live HubSpot)."""
+        notes = self.world.crm.list_notes(self.tenant_id, contact_id)
+        return [
+            {
+                "id": note.id,
+                "contact_id": note.contact_id,
+                "body": note.body,
+                "created": note.created,
+            }
+            for note in notes
+        ]
+
     def list_charges(self, customer_id: str) -> list[dict[str, Any]]:
         charges = self.world.stripe.list_charges(self.tenant_id, customer_id)
         return [

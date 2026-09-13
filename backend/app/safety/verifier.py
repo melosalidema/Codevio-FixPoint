@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.providers.world import RefundRecord, SlackTwin, World
@@ -16,6 +16,10 @@ class Intent:
 
     expected_refund_charge: str | None = None
     expected_refund_cents: int = 0
+    expected_contact_id: str | None = None
+    # Refunded totals observed before execution, per charge. A live provider
+    # keeps history across runs, so only *new* refunds count as mutations.
+    prior_refunded_cents: dict[str, int] = field(default_factory=dict)
     expect_no_mutation: bool = False
     expect_sync: bool = True
 
@@ -57,7 +61,14 @@ def verify(
     checks: list[CheckResult] = []
     tenant = ctx.tenant_id
 
-    refunds = {cid: c for cid, c in world.charges.items() if c.tenant_id == tenant and c.refunded_cents > 0}
+    # Only refunds that grew past their pre-execution total count as mutations
+    # of this run; a live provider retains refunds from earlier runs.
+    refunds = {
+        cid: charge
+        for cid, charge in world.charges.items()
+        if charge.tenant_id == tenant
+        and charge.refunded_cents > intent.prior_refunded_cents.get(cid, 0)
+    }
 
     if intent.expect_no_mutation:
         no_mutation = len(refunds) == 0
@@ -78,10 +89,16 @@ def verify(
         else:
             read_error = ""
 
+        prior_refunded = intent.prior_refunded_cents.get(charge_id, 0)
+        delta = (
+            charge.refunded_cents - prior_refunded
+            if charge is not None and getattr(charge, "tenant_id", tenant) == tenant
+            else 0
+        )
         ok = (
             charge is not None
             and getattr(charge, "tenant_id", tenant) == tenant
-            and charge.refunded_cents == intent.expected_refund_cents
+            and delta == intent.expected_refund_cents
         )
         refunded = getattr(charge, "refunded_cents", "missing")
         checks.append(
@@ -89,7 +106,8 @@ def verify(
                 name="required_outcome",
                 passed=ok,
                 detail=(
-                    f"charge {charge_id} refunded {refunded}/{intent.expected_refund_cents}"
+                    f"charge {charge_id} refunded {refunded} total (+{delta} this run),"
+                    f" expected {intent.expected_refund_cents}"
                     + (f" (fresh read failed: {read_error})" if read_error else "")
                 ),
             )
@@ -114,15 +132,24 @@ def verify(
             )
         else:
             active = [r for r in refund_list if r.status not in INACTIVE_REFUND_STATUSES]
-            total = sum(r.amount_cents for r in active)
-            exactly_one = len(active) == 1 and total == intent.expected_refund_cents
+            # Prefer refunds stamped with this run id (live providers keep
+            # history); fall back to the whole active set for providers that
+            # do not record metadata.
+            run_refunds = [
+                refund for refund in active if (refund.metadata or {}).get("run_id") == ctx.run_id
+            ]
+            counted = run_refunds or active
+            basis = "this run" if run_refunds else "all refunds"
+            total = sum(r.amount_cents for r in counted)
+            exactly_one = len(counted) == 1 and total == intent.expected_refund_cents
             checks.append(
                 CheckResult(
                     name="exactly_one_refund",
                     passed=exactly_one,
                     detail=(
-                        f"charge {charge_id} has {len(active)} active refund(s) totalling {total} cents;"
-                        f" expected exactly 1 totalling {intent.expected_refund_cents}"
+                        f"charge {charge_id} has {len(counted)} active refund(s) ({basis})"
+                        f" totalling {total} cents; expected exactly 1 totalling"
+                        f" {intent.expected_refund_cents}"
                     ),
                 )
             )
@@ -145,6 +172,43 @@ def verify(
                 detail="no unrelated refunds" if not extra else f"unrelated refunds: {sorted(extra)}",
             )
         )
+
+    if intent.expected_contact_id:
+        # Prove the run note exists on the pinned contact with a fresh read.
+        # For live HubSpot there is no cache fallback: a failed read fails.
+        crm = getattr(world, "crm", None)
+        crm_notes = None
+        crm_error = ""
+        if crm is None or not hasattr(crm, "list_notes"):
+            crm_error = "provider_unavailable"
+        else:
+            try:
+                crm_notes = list(crm.list_notes(tenant, intent.expected_contact_id))
+            except Exception as error:  # noqa: BLE001 - a failed read fails the check
+                crm_error = type(error).__name__
+        if crm_notes is None:
+            checks.append(
+                CheckResult(
+                    name="crm_note_recorded",
+                    passed=False,
+                    detail=f"crm read failed for contact {intent.expected_contact_id}: {crm_error}",
+                )
+            )
+        else:
+            marker = f"run {ctx.run_id}"
+            matched = next((note for note in crm_notes if marker in note.body), None)
+            checks.append(
+                CheckResult(
+                    name="crm_note_recorded",
+                    passed=matched is not None,
+                    detail=(
+                        f"run note present on contact {intent.expected_contact_id}"
+                        if matched is not None
+                        else f"no note containing '{marker}' on contact {intent.expected_contact_id} "
+                        f"({len(crm_notes)} note(s) read)"
+                    ),
+                )
+            )
 
     sent_drafts = [d for d in world.drafts if d.tenant_id == tenant and d.sent]
     checks.append(

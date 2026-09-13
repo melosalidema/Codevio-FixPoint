@@ -19,7 +19,7 @@ from typing import Any
 
 import httpx
 
-from app.providers.world import RefundRecord, SlackTwin
+from app.providers.world import NoteRecord, RefundRecord, SlackTwin
 
 # ---- view objects mirroring the in-process twins ------------------------------
 
@@ -328,7 +328,22 @@ class CrmArga:
         return contacts
 
     def add_note(self, tenant_id: str, contact_id: str, body: str) -> ArgaContact:
-        self.client.post_json("/crm/v3/objects/notes", {"properties": {"hs_note_body": body}})
+        # Mirror HubSpot: create the note and associate it with the contact
+        # (note_to_contact type id 202) so it appears on the record.
+        self.client.post_json(
+            "/crm/v3/objects/notes",
+            {
+                "properties": {"hs_note_body": body},
+                "associations": [
+                    {
+                        "to": {"id": contact_id},
+                        "types": [
+                            {"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": 202}
+                        ],
+                    }
+                ],
+            },
+        )
         self._notes.setdefault(contact_id, []).append(body)
         contact = self._contacts.get(contact_id)
         if contact is None:
@@ -336,6 +351,31 @@ class CrmArga:
             self._contacts[contact_id] = contact
         contact.notes = list(self._notes[contact_id])
         return contact
+
+    def list_notes(self, tenant_id: str, contact_id: str) -> list[NoteRecord]:
+        """Fresh read: association lookup, then a batch read of the notes."""
+        associations = self.client.get(f"/crm/v4/objects/contacts/{contact_id}/associations/notes")
+        note_ids = [
+            str(row.get("toObjectId") or row.get("id") or "")
+            for row in associations.get("results", [])
+        ]
+        note_ids = [note_id for note_id in note_ids if note_id]
+        if not note_ids:
+            return []
+        data = self.client.post_json(
+            "/crm/v3/objects/notes/batch/read",
+            {"inputs": [{"id": note_id} for note_id in note_ids], "properties": ["hs_note_body"]},
+        )
+        return [
+            NoteRecord(
+                id=str(row.get("id", "")),
+                contact_id=contact_id,
+                body=str((row.get("properties") or {}).get("hs_note_body") or ""),
+                tenant_id=tenant_id,
+                created=row.get("createdAt"),
+            )
+            for row in data.get("results", [])
+        ]
 
     def update_status(self, tenant_id: str, contact_id: str, status: str) -> ArgaContact:
         self.client.post_json(f"/crm/v3/objects/contacts/{contact_id}", {"properties": {"status": status}})

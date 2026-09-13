@@ -220,3 +220,65 @@ deduplicates, records, and links to the run via `metadata.run_id`; mismatches ar
   with the same persisted key.
 - `pytest -q` covers the Stripe client, webhooks and verifier with HTTP mocks; no Stripe account is
   needed for the test suite.
+
+---
+
+## 5. HubSpot CRM (private app)
+
+HubSpot is an independent per-service backend; it can be live while Stripe/Gmail/Slack/Drive keep
+their own configuration.
+
+### Prerequisites
+
+- A HubSpot developer test account or sandbox.
+- A **private app** (Settings → Integrations → Private Apps) with scopes:
+  `crm.objects.contacts.read`, `crm.objects.contacts.write`, `crm.objects.notes.read`,
+  `crm.objects.notes.write` (add `crm.schemas.contacts.write` only if the seeder creates the
+  status property). Copy the `pat-...` access token.
+
+> HubSpot private-app tokens write to a **real portal. There is no test mode.** Use a free
+> developer test account or sandbox and treat the token as a production secret.
+
+### Configure
+
+| Variable | Value |
+| --- | --- |
+| `FIXPOINT_CRM_BACKEND` | `hubspot` |
+| `FIXPOINT_HUBSPOT_TOKEN` | `pat-...` (never commit) |
+| `FIXPOINT_HUBSPOT_STATUS_PROPERTY` | `fixpoint_status` (default) |
+| `FIXPOINT_HUBSPOT_REFUND_STATUS` | empty (no status write) or e.g. `refunded` |
+| `FIXPOINT_HUBSPOT_TIMEOUT_SECONDS` | `10` |
+| `FIXPOINT_HUBSPOT_MAX_RETRIES` | `2` |
+
+A missing token with `FIXPOINT_CRM_BACKEND=hubspot` fails at startup — never a silent twin.
+
+### Seed
+
+```bash
+cd backend
+FIXPOINT_HUBSPOT_TOKEN=pat-... python -m scripts.hubspot_seed --yes
+# optional:
+#   --with-duplicate           second contact with the same email (ambiguity demo)
+#   --create-status-property   creates fixpoint_status (needs crm.schemas.contacts.write)
+```
+
+The script warns loudly, requires `--yes` (or an interactive confirmation), is idempotent, and
+never prints the token. Without `--yes` in a non-interactive shell it refuses to write.
+
+### Demo run
+
+```text
+I was double charged, please refund the duplicate charge for jane@acme.com
+```
+
+At `amount_cents=4200` the run pauses for team-lead approval, then after approval writes a run
+note associated with the pinned contact and the verifier fresh-reads that contact's notes
+(`crm_note_recorded`). With `FIXPOINT_HUBSPOT_REFUND_STATUS=refunded` the status property is also
+patched; when empty, no status PATCH is made. `cross_system_sync` still passes.
+
+### Limitations
+
+CRM-case intake is not implemented in v1: legacy private apps cannot provide the signed webhook
+intake this workflow needs. Future options are a polling worker (preferred first implementation)
+or a public OAuth app with `X-HubSpot-Signature-v3` verification. `FIXPOINT_HUBSPOT_WEBHOOK_SECRET`
+is reserved for that work and unused in v1.

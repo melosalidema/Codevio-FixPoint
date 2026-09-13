@@ -208,6 +208,7 @@ async def create_run(db: AsyncSession, body: RunCreateRequest) -> dict[str, Any]
         policy_file_id=body.policy_file_id,
         parser_fn=parser,
         planner_fn=planner,
+        crm_refund_status=settings.hubspot_refund_status,
     )
     session.run()
     session.planner_source = source_label(parser, planner)
@@ -271,6 +272,7 @@ def replay_session(row: Run) -> tuple[RunSession, Any]:
         row.request_text,
         policy_file_id=row.policy_file_id,
         planner_source=row.planner_source or "deterministic",
+        crm_refund_status=settings.hubspot_refund_status,
     )
     session.replay_committed(facts, action)
     return session, world

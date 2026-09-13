@@ -120,6 +120,10 @@ class Settings(BaseSettings):
     # backend lets live Stripe run while the other apps stay on twins.
     stripe_backend: str = ""
 
+    # Per-service CRM backend: "twin", "arga", "hubspot" or "" (follow
+    # ``provider_backend``). Independent of the Stripe selection.
+    crm_backend: str = ""
+
     # Live Stripe client. Test mode (``sk_test_...``) is the expected mode.
     # ``stripe_allow_live`` must be explicitly set before a live key is accepted.
     stripe_api_key: str = ""
@@ -128,6 +132,16 @@ class Settings(BaseSettings):
     stripe_timeout_seconds: float = 10.0
     stripe_max_retries: int = 2
     stripe_allow_live: bool = False
+
+    # Live HubSpot CRM client. Private-app tokens write to a real portal; there
+    # is no test mode. Use a developer test account/sandbox.
+    hubspot_token: str = ""
+    hubspot_status_property: str = "fixpoint_status"
+    hubspot_refund_status: str = ""
+    hubspot_timeout_seconds: float = 10.0
+    hubspot_max_retries: int = 2
+    # Reserved for future public-app webhook intake; unused in v1.
+    hubspot_webhook_secret: str = ""
 
     @property
     def llm_preset(self) -> tuple[str, str, bool]:
@@ -164,6 +178,11 @@ class Settings(BaseSettings):
     def stripe_configured(self) -> bool:
         """True when a live Stripe client should be constructed."""
         return self.stripe_backend.lower() == "stripe" and bool(self.stripe_api_key)
+
+    @property
+    def hubspot_configured(self) -> bool:
+        """True when a live HubSpot client should be constructed."""
+        return self.crm_backend.lower() == "hubspot" and bool(self.hubspot_token)
 
     @model_validator(mode="after")
     def _guard_live_stripe_key(self) -> Settings:

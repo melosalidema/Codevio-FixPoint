@@ -186,6 +186,34 @@ python -m uvicorn app.main:app --port 8000
 - **Verification:** the verifier re-reads `GET /v1/charges/{id}` and `GET /v1/refunds?charge=`,
   then asserts exactly one refund totalling the approved amount before the run can report success.
 
+### Real HubSpot CRM (private app)
+
+HubSpot can run for real while Stripe and the other apps use their own backends:
+
+```bash
+cd backend
+FIXPOINT_CRM_BACKEND=hubspot \
+FIXPOINT_HUBSPOT_TOKEN=pat-... \
+python -m uvicorn app.main:app --port 8000
+```
+
+- **Scopes:** `crm.objects.contacts.read`, `crm.objects.contacts.write`,
+  `crm.objects.notes.read`, `crm.objects.notes.write`; add `crm.schemas.contacts.write` only when
+  the seeder creates the custom status property.
+- **Seed:** `python -m scripts.hubspot_seed --yes` (reuses/creates `jane@acme.com`);
+  `--with-duplicate` for the ambiguity demo, `--create-status-property` to create
+  `fixpoint_status`.
+- **Safety:** the agent pins one contact, writes the run note **associated with that contact**
+  (note→contact type 202) and, when `FIXPOINT_HUBSPOT_REFUND_STATUS` is set, patches the status
+  property. Contact notes are re-read from HubSpot (`crm_note_recorded`) before the run may claim
+  success — there is no cache fallback for live HubSpot.
+- **Duplicate contacts:** multiple contacts for the same email trigger the same ambiguity
+  escalation as duplicate Stripe customers; the agent never guesses.
+- **Limitations:** HubSpot private-app tokens write to a **real portal** (there is no test mode);
+  use a developer test account and treat the token as a production secret. CRM-case intake is not
+  implemented in v1 — legacy private apps cannot sign webhooks; future options are polling
+  (preferred) or a public OAuth app with signed webhook handling.
+
 ### Tests and evaluations
 
 ```bash
@@ -328,6 +356,13 @@ Notes:
 | `FIXPOINT_STRIPE_TIMEOUT_SECONDS` | `10` | Stripe HTTP timeout (connect capped at 3s) |
 | `FIXPOINT_STRIPE_MAX_RETRIES` | `2` | GET retries on 408/429/5xx; refund POSTs are never retried client-side |
 | `FIXPOINT_STRIPE_ALLOW_LIVE` | `false` | Required before an `sk_live_...` key is accepted |
+| `FIXPOINT_CRM_BACKEND` | empty | `twin`, `arga` or `hubspot`; empty follows `FIXPOINT_PROVIDER_BACKEND` |
+| `FIXPOINT_HUBSPOT_TOKEN` | empty | Private-app token (`pat-...`); writes to a real portal — never commit |
+| `FIXPOINT_HUBSPOT_STATUS_PROPERTY` | `fixpoint_status` | Contact property read/written for CRM status |
+| `FIXPOINT_HUBSPOT_REFUND_STATUS` | empty | If set, status written to the contact after a successful refund |
+| `FIXPOINT_HUBSPOT_TIMEOUT_SECONDS` | `10` | HubSpot HTTP timeout |
+| `FIXPOINT_HUBSPOT_MAX_RETRIES` | `2` | Read retries on 429/5xx; writes retry on 429 only |
+| `FIXPOINT_HUBSPOT_WEBHOOK_SECRET` | empty | Reserved for future public-app intake (unused in v1) |
 | `FIXPOINT_NOTIFY_FORMSPREE_ENABLED` | `false` | Email a Formspree inbox when a refund is approved or denied (agent or human) |
 | `FIXPOINT_NOTIFY_FORMSPREE_FORM_ID` | empty | Formspree form id (e.g. `xaeygdwn`) used for decision emails |
 | `FIXPOINT_NOTIFY_FORMSPREE_TIMEOUT_SECONDS` | `5` | Delivery timeout before the notification is dropped |
