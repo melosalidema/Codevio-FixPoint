@@ -17,13 +17,15 @@ CAPS = ["stripe.read", "stripe.refund", "email.draft", "slack.post", "crm.write"
 
 
 @pytest.fixture(autouse=True)
-def _disable_outbound_notifications(monkeypatch):
-    """Tests must never POST decision notifications to Formspree.
+def _hermetic_providers(monkeypatch):
+    """Tests must never touch real providers or send real notifications.
 
     Settings are cached process-wide, so clear the cache around every test to
-    keep a developer's local ``.env`` from enabling real network delivery.
+    keep a developer's local ``.env`` (Stripe live backend, Formspree enabled)
+    from leaking into the suite.
     """
     monkeypatch.setenv("FIXPOINT_NOTIFY_FORMSPREE_ENABLED", "false")
+    monkeypatch.setenv("FIXPOINT_STRIPE_BACKEND", "twin")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
