@@ -16,6 +16,7 @@ from app.repository import runs as repo
 from app.safety.audit import verify_entries
 from app.safety.models import ParsedFacts, ProposedAction, RunContext
 from app.schemas import RunCreateRequest
+from app.services import notifications
 
 # Capabilities granted to every run. The client cannot change these.
 DEFAULT_CAPABILITIES = [
@@ -195,7 +196,8 @@ async def create_run(db: AsyncSession, body: RunCreateRequest) -> dict[str, Any]
     )
     seed = seed_for(tenant_id, body.amount_cents, body.duplicate_customer)
     world = build_backend(settings, seed)
-    world.stripe.fail_refund_remaining = body.stripe_refund_failures
+    if getattr(world.stripe, "supports_failure_injection", False):
+        world.stripe.fail_refund_remaining = body.stripe_refund_failures
     world_before = world.snapshot()
 
     parser, planner = build_hybrid(settings)
@@ -210,6 +212,10 @@ async def create_run(db: AsyncSession, body: RunCreateRequest) -> dict[str, Any]
     session.run()
     session.planner_source = source_label(parser, planner)
     session.planner_meta = planner.meta or {}
+
+    # Prefer the engine's post-investigation snapshot: it reflects the real
+    # provider state (including live Stripe) immediately before execution.
+    snapshot_before = session.world_before or world_before
 
     row = await repo.create_run_row(
         db,
@@ -230,9 +236,10 @@ async def create_run(db: AsyncSession, body: RunCreateRequest) -> dict[str, Any]
         provider_backend=settings.provider_backend,
         planner_meta=session.planner_meta,
     )
-    await repo.persist_session(db, row, session, world_before, world.snapshot())
+    await repo.persist_session(db, row, session, snapshot_before, world.snapshot())
     await db.commit()
-    return session_detail(row, session, world_before, world.snapshot())
+    _notify_decision_from_session(row, session, automatic=True)
+    return session_detail(row, session, snapshot_before, world.snapshot())
 
 
 def replay_session(row: Run) -> tuple[RunSession, Any]:
@@ -246,7 +253,8 @@ def replay_session(row: Run) -> tuple[RunSession, Any]:
     settings = get_settings()
     seed = row.seed or {}
     world = build_backend(settings, seed)
-    world.stripe.fail_refund_remaining = row.stripe_refund_failures
+    if getattr(world.stripe, "supports_failure_injection", False):
+        world.stripe.fail_refund_remaining = row.stripe_refund_failures
     ctx = RunContext(
         run_id=row.id,
         tenant_id=row.tenant_id,
@@ -268,6 +276,49 @@ def replay_session(row: Run) -> tuple[RunSession, Any]:
     return session, world
 
 
+def _notify_decision_from_session(
+    row: Run,
+    session: RunSession,
+    *,
+    actor: str = "",
+    role: str = "",
+    automatic: bool = False,
+) -> None:
+    """Best-effort email notification for an autonomous or human decision.
+
+    Approved outcomes (money moved) and denied outcomes (no money moved) are
+    reported to Formspree; delivery never affects the run.
+    """
+    report = session.report
+    if report is None:
+        return
+    if report.outcome in notifications.APPROVED_OUTCOMES:
+        decision = "approved"
+    elif report.outcome in notifications.DENIED_OUTCOMES:
+        decision = "denied"
+    else:
+        return
+
+    amount = row.amount_cents
+    if session.artifact is not None:
+        amount = session.artifact.amount_cents
+    elif session.proposed is not None and session.proposed.params.get("amount_cents") is not None:
+        amount = int(session.proposed.params["amount_cents"])
+
+    notifications.notify_decision(
+        decision=decision,
+        outcome=report.outcome,
+        run_id=row.id,
+        request_text=row.request_text,
+        facts=row.parsed_facts,
+        amount_cents=int(amount),
+        actor=actor,
+        role=role,
+        automatic=automatic,
+        trigger=row.trigger,
+    )
+
+
 async def _load_for_decision(db: AsyncSession, run_id: str) -> tuple[Run, list[Any]]:
     row = await repo.get_run(db, run_id)
     if row is None:
@@ -287,6 +338,7 @@ async def approve_run(db: AsyncSession, run_id: str, role: str, approver_user_id
     session.approve(role, approver_user_id)
     await repo.persist_session(db, row, session, row.world_before, world.snapshot())
     await db.commit()
+    _notify_decision_from_session(row, session, actor=approver_user_id, role=role)
     return await detail_from_db(db, row)
 
 
@@ -296,6 +348,7 @@ async def deny_run(db: AsyncSession, run_id: str, approver_user_id: str) -> dict
     session.deny(approver_user_id)
     await repo.persist_session(db, row, session, row.world_before, world.snapshot())
     await db.commit()
+    _notify_decision_from_session(row, session, actor=approver_user_id)
     return await detail_from_db(db, row)
 
 

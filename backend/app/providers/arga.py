@@ -19,7 +19,7 @@ from typing import Any
 
 import httpx
 
-from app.providers.world import SlackTwin
+from app.providers.world import RefundRecord, SlackTwin
 
 # ---- view objects mirroring the in-process twins ------------------------------
 
@@ -130,10 +130,13 @@ class ArgaClient:
 
 
 class StripeArga:
+    supports_failure_injection = True
+
     def __init__(self, client: ArgaClient, cache: dict[str, ArgaCharge] | None = None) -> None:
         self.client = client
         self.fail_refund_remaining = 0  # parity with the in-process twin
         self._cache = cache if cache is not None else {}
+        self.refunds: list[RefundRecord] = []
 
     def list_customers(
         self, tenant_id: str, email: str | None = None, name: str | None = None
@@ -163,7 +166,14 @@ class StripeArga:
         return charge
 
     def refund(
-        self, tenant_id: str, charge_id: str, amount_cents: int, idempotency_key: str
+        self,
+        tenant_id: str,
+        charge_id: str,
+        amount_cents: int,
+        idempotency_key: str,
+        *,
+        run_id: str = "",
+        reason: str = "",
     ) -> dict[str, Any]:
         data = self.client.post_form(
             "/v1/refunds",
@@ -176,12 +186,59 @@ class StripeArga:
             cached.status = (
                 "refunded" if cached.refunded_cents >= cached.amount_cents else "partially_refunded"
             )
+        refund_id = data.get("id", "")
+        if refund_id:
+            self.refunds.append(
+                RefundRecord(
+                    id=refund_id,
+                    charge_id=charge_id,
+                    amount_cents=amount_cents,
+                    tenant_id=tenant_id,
+                    status=str(data.get("status", "succeeded") or "succeeded"),
+                    currency=str(data.get("currency", "usd")),
+                    reason=reason,
+                    metadata={"run_id": run_id} if run_id else {},
+                )
+            )
         return {
             "id": data.get("id", ""),
             "charge_id": charge_id,
             "amount_cents": amount_cents,
             "duplicate": data.get("status") == "duplicate",
         }
+
+    def list_refunds(self, tenant_id: str, charge_id: str) -> list[RefundRecord]:
+        data = self.client.get("/v1/refunds", params={"charge": charge_id})
+        return [self._refund(row, tenant_id, charge_id) for row in data.get("data", [])]
+
+    def list_subscriptions(self, tenant_id: str, customer_id: str) -> list[dict[str, Any]]:
+        data = self.client.get("/v1/subscriptions", params={"customer": customer_id, "status": "all"})
+        return [
+            {
+                "id": row.get("id", ""),
+                "customer_id": customer_id,
+                "status": row.get("status", ""),
+                "currency": row.get("currency", "usd"),
+                "created": row.get("created"),
+                "items": row.get("items", {}),
+                "metadata": row.get("metadata", {}),
+            }
+            for row in data.get("data", [])
+        ]
+
+    @staticmethod
+    def _refund(data: dict[str, Any], tenant_id: str, charge_id: str) -> RefundRecord:
+        return RefundRecord(
+            id=data.get("id", ""),
+            charge_id=data.get("charge", charge_id),
+            amount_cents=int(data.get("amount", 0)),
+            tenant_id=tenant_id,
+            status=data.get("status", "succeeded"),
+            currency=data.get("currency", "usd"),
+            reason=data.get("reason", "") or "",
+            created=data.get("created"),
+            metadata=dict(data.get("metadata", {}) or {}),
+        )
 
     @staticmethod
     def _charge(data: dict[str, Any], tenant_id: str) -> ArgaCharge:

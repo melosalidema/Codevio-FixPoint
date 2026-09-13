@@ -15,6 +15,7 @@ class Resolution:
     charges: list[dict[str, Any]] = field(default_factory=list)
     policy: dict[str, Any] | None = None
     duplicate_charge_ids: list[str] = field(default_factory=list)
+    subscriptions: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def ambiguous(self) -> bool:

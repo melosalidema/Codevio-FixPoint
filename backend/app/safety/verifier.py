@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
-from app.providers.world import SlackTwin, World
+from app.providers.world import RefundRecord, SlackTwin, World
 from app.safety.models import CheckResult, RunContext, VerificationResult
+
+# Refund statuses that did not move money and therefore do not count.
+INACTIVE_REFUND_STATUSES = {"failed", "canceled"}
 
 
 @dataclass
@@ -14,6 +18,25 @@ class Intent:
     expected_refund_cents: int = 0
     expect_no_mutation: bool = False
     expect_sync: bool = True
+
+
+def _fresh_charge(world: Any, tenant_id: str, charge_id: str) -> Any | None:
+    """Re-read one charge. Live Stripe performs an HTTP GET; twins read state.
+
+    Returns ``None`` when the charge cannot be read at all.
+    """
+    stripe = getattr(world, "stripe", None)
+    if stripe is not None and hasattr(stripe, "get_charge"):
+        return stripe.get_charge(tenant_id, charge_id)
+    return world.charges.get(charge_id)
+
+
+def _fresh_refunds(world: Any, tenant_id: str, charge_id: str) -> list[RefundRecord] | None:
+    """List refunds for a charge, or ``None`` when the provider cannot."""
+    stripe = getattr(world, "stripe", None)
+    if stripe is not None and hasattr(stripe, "list_refunds"):
+        return list(stripe.list_refunds(tenant_id, charge_id))
+    return None
 
 
 def verify(
@@ -27,6 +50,9 @@ def verify(
     The verifier never trusts the agent's narrative: it checks required
     outcomes, forbidden side effects (sent email, disallowed channels,
     unrelated refunds), and cross-system synchronization.
+
+    For live providers the charge and its refunds are re-fetched over HTTP, so
+    a stale pre-execution snapshot can never make a claim look true.
     """
     checks: list[CheckResult] = []
     tenant = ctx.tenant_id
@@ -43,10 +69,18 @@ def verify(
             )
         )
     elif intent.expected_refund_charge:
-        charge = world.charges.get(intent.expected_refund_charge)
+        charge_id = intent.expected_refund_charge
+        try:
+            charge = _fresh_charge(world, tenant, charge_id)
+        except Exception as error:  # noqa: BLE001 - a failed read fails the check
+            charge = None
+            read_error = type(error).__name__
+        else:
+            read_error = ""
+
         ok = (
             charge is not None
-            and charge.tenant_id == tenant
+            and getattr(charge, "tenant_id", tenant) == tenant
             and charge.refunded_cents == intent.expected_refund_cents
         )
         refunded = getattr(charge, "refunded_cents", "missing")
@@ -54,11 +88,56 @@ def verify(
             CheckResult(
                 name="required_outcome",
                 passed=ok,
-                detail=f"charge {intent.expected_refund_charge} refunded {refunded}"
-                f"/{intent.expected_refund_cents}",
+                detail=(
+                    f"charge {charge_id} refunded {refunded}/{intent.expected_refund_cents}"
+                    + (f" (fresh read failed: {read_error})" if read_error else "")
+                ),
             )
         )
-        extra = {cid for cid in refunds if cid != intent.expected_refund_charge}
+
+        try:
+            refund_list = _fresh_refunds(world, tenant, charge_id)
+        except Exception as error:  # noqa: BLE001 - a failed read fails the check
+            refund_list = None
+            refund_read_error = type(error).__name__
+        else:
+            refund_read_error = ""
+
+        if refund_list is None:
+            checks.append(
+                CheckResult(
+                    name="exactly_one_refund",
+                    passed=False,
+                    detail="refund list unavailable"
+                    + (f" (fresh read failed: {refund_read_error})" if refund_read_error else ""),
+                )
+            )
+        else:
+            active = [r for r in refund_list if r.status not in INACTIVE_REFUND_STATUSES]
+            total = sum(r.amount_cents for r in active)
+            exactly_one = len(active) == 1 and total == intent.expected_refund_cents
+            checks.append(
+                CheckResult(
+                    name="exactly_one_refund",
+                    passed=exactly_one,
+                    detail=(
+                        f"charge {charge_id} has {len(active)} active refund(s) totalling {total} cents;"
+                        f" expected exactly 1 totalling {intent.expected_refund_cents}"
+                    ),
+                )
+            )
+            misplaced = [r for r in active if r.charge_id != charge_id]
+            checks.append(
+                CheckResult(
+                    name="refunds_belong_to_charge",
+                    passed=not misplaced,
+                    detail="all refunds belong to the pinned charge"
+                    if not misplaced
+                    else f"refunds on other charges: {[r.id for r in misplaced]}",
+                )
+            )
+
+        extra = {cid for cid in refunds if cid != charge_id}
         checks.append(
             CheckResult(
                 name="no_extra_refunds",

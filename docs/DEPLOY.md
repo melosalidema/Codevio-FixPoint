@@ -149,3 +149,74 @@ No code changes are needed: `asyncpg` is a dependency, `config.py` rewrites `pos
 | External URL needs SSL | append `?sslmode=require` (internal URL does not) |
 | Migrations | idempotent; run on every container start via `start.sh` |
 | Multiple replicas | supported, but keep 1 for the demo |
+
+---
+
+## 4. Stripe (test mode)
+
+Stripe is a per-service backend: it can be live while Gmail/Slack/CRM/Drive stay on twins.
+
+### Prerequisites
+
+- A Stripe account with **test mode** enabled (no real money).
+- The [Stripe CLI](https://stripe.com/docs/stripe-cli) for local webhook forwarding.
+
+### Configure
+
+| Variable | Value |
+| --- | --- |
+| `FIXPOINT_STRIPE_BACKEND` | `stripe` |
+| `FIXPOINT_STRIPE_API_KEY` | `sk_test_...` (from Developers → API keys) |
+| `FIXPOINT_STRIPE_WEBHOOK_SECRET` | `whsec_...` printed by `stripe listen` |
+| `FIXPOINT_STRIPE_API_VERSION` | pinned version, default `2024-06-20` |
+| `FIXPOINT_STRIPE_ALLOW_LIVE` | leave `false`; required only for live keys |
+
+A live key (`sk_live_...`) makes the app fail at startup with a clear error unless
+`FIXPOINT_STRIPE_ALLOW_LIVE=true`. Never put a live key in local `.env`.
+
+### Seed demo data
+
+```bash
+cd backend
+FIXPOINT_STRIPE_API_KEY=sk_test_... python -m scripts.stripe_seed --with-subscription
+```
+
+Creates/reuses the customer `jane@acme.com`, two identical `$42` charges (PaymentIntents with
+`pm_card_visa`), and an optional subscription. Re-running is safe: objects carry
+`metadata.fixpoint_seed=demo` and are reused. The script refuses live keys.
+
+### Run with webhooks
+
+```bash
+# shell 1
+cd backend
+FIXPOINT_STRIPE_BACKEND=stripe FIXPOINT_STRIPE_API_KEY=sk_test_... \
+  FIXPOINT_STRIPE_WEBHOOK_SECRET=whsec_... \
+  python -m uvicorn app.main:app --port 8000
+
+# shell 2
+stripe listen --forward-to localhost:8000/api/webhooks/stripe
+```
+
+### Demo run
+
+Submit the suggested text from the seeder:
+
+```text
+I was double charged, please refund the duplicate charge for jane@acme.com
+```
+
+with `amount_cents=4200` (or use the storefront). The agent resolves the customer, finds the two
+charges, pauses for team-lead approval (over $25), executes **one** refund with the persisted
+idempotency key, verifies with fresh `GET /v1/charges/{id}` and `GET /v1/refunds?charge=` reads,
+and reports `exactly_one_refund`. Stripe emits refund events, which Fixpoint verifies,
+deduplicates, records, and links to the run via `metadata.run_id`; mismatches are flagged.
+
+### Notes
+
+- Duplicate customers for the same email trigger the existing ambiguity escalation; the agent never
+  picks one.
+- Client-side retries apply to GETs only. A transient refund failure is retried once by the engine
+  with the same persisted key.
+- `pytest -q` covers the Stripe client, webhooks and verifier with HTTP mocks; no Stripe account is
+  needed for the test suite.

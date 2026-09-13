@@ -90,6 +90,7 @@ backend/
   tests/             60+ deterministic unit, API, DB, replay and adapter tests
 frontend/
   src/               React console: Run Console, Evaluation, Runs, Run Detail, About
+storefront/          Fake customer storefront (Platzi Fake Store API -> Fixpoint refunds)
 Dockerfile           multi-stage: Node build -> Python runtime serving API + SPA
 railway.json         Railway deploy configuration (healthcheck /health)
 docker-compose.yml   local Postgres + API
@@ -129,6 +130,61 @@ npm install
 npm run dev
 # open http://localhost:5173
 ```
+
+### Demo storefront (customer side)
+
+`storefront/` is a fake ecommerce app that exercises the agent end to end: it lists products
+from the Platzi Fake Store API, creates demo orders with an immutable price snapshot, and files
+refund requests into `POST /api/runs`. Small refunds complete autonomously; larger ones pause
+for a human in the operator console.
+
+```bash
+cd storefront
+npm install
+npm run dev
+# open http://localhost:5174 (proxies /api to the backend on :8000)
+```
+
+Demo tip: check out as `jane@acme.com` (the seeded customer the twins can resolve). The refund
+form has *Test hooks* for Stripe-failure retries, prompt injection and ambiguous-identity
+escalation. `make storefront` and `make storefront-build` wrap the same commands.
+
+Order and refund events also send an email notification through Formspree
+(`storefront/src/lib/formspree.ts`): order placements email the order summary, and refund
+requests email the reason, amount and exact agent request text. Notifications are sent with the
+customer's address as Reply-To and never block the order or the agent run. Set
+`VITE_FORMSPREE_FORM_ID` to use a different form; the default points at the demo form.
+
+The backend sends a second email when a refund is **decided** — autonomously by the agent or by a
+human approving/denying in the console — including the decision, amount, order, run id and who
+decided (`backend/app/services/notifications.py`). Enable it with
+`FIXPOINT_NOTIFY_FORMSPREE_ENABLED=true` plus `FIXPOINT_NOTIFY_FORMSPREE_FORM_ID`; delivery is
+best-effort and never affects the run.
+
+### Real Stripe (test mode)
+
+Stripe can run for real while Gmail/Slack/CRM/Drive stay on the deterministic twins:
+
+```bash
+cd backend
+FIXPOINT_STRIPE_BACKEND=stripe \
+FIXPOINT_STRIPE_API_KEY=sk_test_... \
+python -m uvicorn app.main:app --port 8000
+```
+
+- **Seed demo data** (customer `jane@acme.com`, two identical $42 charges, optional subscription):
+  `python -m scripts.stripe_seed`. The script reuses `metadata.fixpoint_seed` objects and refuses
+  live keys.
+- **Webhooks locally:** run `stripe listen --forward-to localhost:8000/api/webhooks/stripe` and put
+  the printed `whsec_...` in `FIXPOINT_STRIPE_WEBHOOK_SECRET`. `charge.refunded`,
+  `refund.created/updated/failed` and `charge.dispute.created` are signature-verified against the
+  raw body (300s tolerance), deduplicated, recorded and linked to the run through
+  `metadata.run_id`; mismatches are flagged rather than repaired.
+- **Safety:** live keys are refused unless `FIXPOINT_STRIPE_ALLOW_LIVE=true`; charge pinning,
+  amount ceilings, approval and idempotency are unchanged, and refund POSTs are only retried by
+  the engine with the same persisted key.
+- **Verification:** the verifier re-reads `GET /v1/charges/{id}` and `GET /v1/refunds?charge=`,
+  then asserts exactly one refund totalling the approved amount before the run can report success.
 
 ### Tests and evaluations
 
@@ -190,6 +246,7 @@ See [`docs/DEPLOY.md`](docs/DEPLOY.md) for real providers, Railway deployment an
 | `POST` | `/api/scenarios/{id}/run` | Run one scenario |
 | `POST` | `/api/evals/run` | Run the full matrix and persist results |
 | `GET` | `/api/evals/results` | Latest stored batch (survives restarts) |
+| `POST` | `/api/webhooks/stripe` | Stripe-signed events: verify, dedupe, record, link to run, flag mismatches |
 | `POST` | `/api/webhooks/{provider}` | HMAC-verified, replay-protected webhooks |
 
 Interactive docs: `/docs`.
@@ -264,6 +321,16 @@ Notes:
 | `FIXPOINT_LLM_MODEL` | empty | Model name (e.g. `gpt-4o-mini`) |
 | `FIXPOINT_LLM_TIMEOUT_SECONDS` | `20` | Model call timeout before fallback |
 | `FIXPOINT_PROVIDER_BACKEND` | `twin` | `twin` (in-process) or `arga` (digital twins over HTTP) |
+| `FIXPOINT_STRIPE_BACKEND` | empty | `twin`, `arga` or `stripe`; empty follows `FIXPOINT_PROVIDER_BACKEND` |
+| `FIXPOINT_STRIPE_API_KEY` | empty | Stripe **test** key (`sk_test_...`); live keys require acknowledgement |
+| `FIXPOINT_STRIPE_WEBHOOK_SECRET` | empty | Signing secret for `POST /api/webhooks/stripe` |
+| `FIXPOINT_STRIPE_API_VERSION` | `2024-06-20` | Pinned `Stripe-Version` header sent to Stripe |
+| `FIXPOINT_STRIPE_TIMEOUT_SECONDS` | `10` | Stripe HTTP timeout (connect capped at 3s) |
+| `FIXPOINT_STRIPE_MAX_RETRIES` | `2` | GET retries on 408/429/5xx; refund POSTs are never retried client-side |
+| `FIXPOINT_STRIPE_ALLOW_LIVE` | `false` | Required before an `sk_live_...` key is accepted |
+| `FIXPOINT_NOTIFY_FORMSPREE_ENABLED` | `false` | Email a Formspree inbox when a refund is approved or denied (agent or human) |
+| `FIXPOINT_NOTIFY_FORMSPREE_FORM_ID` | empty | Formspree form id (e.g. `xaeygdwn`) used for decision emails |
+| `FIXPOINT_NOTIFY_FORMSPREE_TIMEOUT_SECONDS` | `5` | Delivery timeout before the notification is dropped |
 | `FIXPOINT_ARGA_*_URL` / `_TOKEN` | empty | Per-service Arga twin endpoints (Stripe, Gmail, Slack, HubSpot, Drive) |
 | `FIXPOINT_CORS_ORIGINS` | `http://localhost:5173,...` | Dev-server CORS (production is same-origin) |
 | `FIXPOINT_STATIC_DIR` | empty | Built SPA directory (set in the Docker image) |

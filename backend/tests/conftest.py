@@ -6,6 +6,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.config import get_settings
 from app.database import get_db
 from app.main import create_app
 from app.models import Base
@@ -13,6 +14,19 @@ from app.providers.world import World
 from app.safety.models import Envelope, GatewayState, RunContext
 
 CAPS = ["stripe.read", "stripe.refund", "email.draft", "slack.post", "crm.write", "drive.read"]
+
+
+@pytest.fixture(autouse=True)
+def _disable_outbound_notifications(monkeypatch):
+    """Tests must never POST decision notifications to Formspree.
+
+    Settings are cached process-wide, so clear the cache around every test to
+    keep a developer's local ``.env`` from enabling real network delivery.
+    """
+    monkeypatch.setenv("FIXPOINT_NOTIFY_FORMSPREE_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 # --------------------------------------------------------------------- unit

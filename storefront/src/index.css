@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  @apply bg-stone-50 text-stone-900 antialiased;
+  background-image:
+    radial-gradient(45rem 25rem at 88% -12%, rgb(251 146 60 / 0.09), transparent 60%),
+    radial-gradient(40rem 22rem at 4% -18%, rgb(16 185 129 / 0.07), transparent 55%);
+  background-attachment: fixed;
+}
+
+:focus-visible {
+  @apply outline-none ring-2 ring-orange-500/70 ring-offset-2 ring-offset-stone-50;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(214 211 209) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-stone-300;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-stone-200 bg-white shadow-card;
+  }
+  .panel-head {
+    @apply flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 px-5 py-4;
+  }
+  .panel-title {
+    @apply font-display text-base font-semibold tracking-tight text-stone-900;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition
+      disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-stone-900 text-white hover:bg-stone-700 active:bg-stone-800;
+  }
+  .btn-accent {
+    @apply btn bg-orange-600 text-white hover:bg-orange-500 active:bg-orange-700;
+  }
+  .btn-success {
+    @apply btn bg-emerald-600 text-white hover:bg-emerald-500 active:bg-emerald-700;
+  }
+  .btn-danger {
+    @apply btn bg-rose-600 text-white hover:bg-rose-500 active:bg-rose-700;
+  }
+  .btn-ghost {
+    @apply btn border border-stone-300 bg-white text-stone-700 hover:border-stone-400 hover:bg-stone-50;
+  }
+  .input {
+    @apply w-full rounded-xl border border-stone-300 bg-white px-3.5 py-2.5 text-sm text-stone-900
+      placeholder:text-stone-400 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20;
+  }
+  .code {
+    @apply rounded-md bg-stone-100 px-1.5 py-0.5 font-mono text-[12px] text-stone-700;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-stone-300 bg-white px-3 py-1 text-xs
+      font-medium text-stone-600 transition hover:border-stone-900 hover:text-stone-900;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -32,6 +32,13 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    # An explicit live Stripe selection without a key must fail at startup, not
+    # silently degrade to a twin while the operator believes Stripe is live.
+    if settings.stripe_backend.lower() == "stripe" and not settings.stripe_api_key:
+        raise RuntimeError("FIXPOINT_STRIPE_BACKEND=stripe requires FIXPOINT_STRIPE_API_KEY")
+    # Surface application logs (notifications, safety warnings) alongside
+    # uvicorn's own output. No-op if the root logger already has handlers.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     app = FastAPI(
         title="Fixpoint Control Plane",
         version=settings.version,

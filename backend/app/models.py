@@ -118,12 +118,21 @@ class IdempotencyKey(Base):
 
 
 class WebhookEvent(Base):
-    """Seen webhook event ids; replay protection survives restarts."""
+    """Seen webhook event ids; replay protection survives restarts.
+
+    Stripe events also carry the record-and-link outcome: ``event_type``,
+    ``run_id`` when metadata links the event to a run, ``status`` (recorded,
+    linked, unlinked, mismatch) and a short ``detail`` for escalation review.
+    """
 
     __tablename__ = "webhook_events"
 
     provider: Mapped[str] = mapped_column(String(32), primary_key=True)
     event_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    run_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    status: Mapped[str] = mapped_column(String(16), default="recorded", server_default="recorded")
+    detail: Mapped[str] = mapped_column(String(160), default="", server_default="")
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

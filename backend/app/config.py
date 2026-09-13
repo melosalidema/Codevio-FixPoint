@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.safety.models import Envelope
@@ -77,6 +77,14 @@ class Settings(BaseSettings):
     default_tenant_id: str = "t_123"
     default_actor_user_id: str = "u_88"
 
+    # Outbound decision notifications. When enabled, Fixpoint POSTs the decision
+    # details to Formspree (https://formspree.io/f/<form_id>) after an autonomous
+    # or human refund decision; Formspree emails the linked inbox. Delivery
+    # failures are logged and never affect a run.
+    notify_formspree_enabled: bool = False
+    notify_formspree_form_id: str = ""
+    notify_formspree_timeout_seconds: float = 5.0
+
     # Optional LLM planner. When disabled (default) the deterministic parser and
     # planner are used: fully offline and replayable. When enabled, the model
     # only proposes; the deterministic Action Gateway still authorizes, and any
@@ -106,6 +114,20 @@ class Settings(BaseSettings):
     arga_hubspot_token: str = ""
     arga_drive_url: str = ""
     arga_drive_token: str = ""
+
+    # Per-service Stripe backend: "twin", "arga", "stripe" or "" (follow
+    # ``provider_backend``). Only Stripe can be overridden today; the composite
+    # backend lets live Stripe run while the other apps stay on twins.
+    stripe_backend: str = ""
+
+    # Live Stripe client. Test mode (``sk_test_...``) is the expected mode.
+    # ``stripe_allow_live`` must be explicitly set before a live key is accepted.
+    stripe_api_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_api_version: str = "2024-06-20"
+    stripe_timeout_seconds: float = 10.0
+    stripe_max_retries: int = 2
+    stripe_allow_live: bool = False
 
     @property
     def llm_preset(self) -> tuple[str, str, bool]:
@@ -137,6 +159,25 @@ class Settings(BaseSettings):
             and self.arga_gmail_url
             and self.arga_slack_url
         )
+
+    @property
+    def stripe_configured(self) -> bool:
+        """True when a live Stripe client should be constructed."""
+        return self.stripe_backend.lower() == "stripe" and bool(self.stripe_api_key)
+
+    @model_validator(mode="after")
+    def _guard_live_stripe_key(self) -> Settings:
+        """Refuse live Stripe keys unless explicitly acknowledged.
+
+        Accidental live execution is the failure mode this guard exists for:
+        the key value is never echoed, only the acknowledgement flag is checked.
+        """
+        if self.stripe_api_key.startswith("sk_live_") and not self.stripe_allow_live:
+            raise ValueError(
+                "FIXPOINT_STRIPE_API_KEY is a live Stripe key. Set "
+                "FIXPOINT_STRIPE_ALLOW_LIVE=true to acknowledge real-money execution."
+            )
+        return self
 
     @field_validator("database_url", mode="after")
     @classmethod

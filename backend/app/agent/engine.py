@@ -64,6 +64,7 @@ class RunSession:
         self.status = "pending"
         self.report: RunReport | None = None
         self.tool_errors: list[str] = []
+        self.world_before: dict[str, Any] | None = None
         self._reset_intent()
 
     def _reset_intent(self) -> None:
@@ -88,8 +89,10 @@ class RunSession:
         customers = self.adapter.resolve_customer(email=email)
         contacts = self.adapter.crm_contacts(email=email)
         charges: list[dict[str, Any]] = []
+        subscriptions: list[dict[str, Any]] = []
         for customer in customers:
             charges.extend(self.adapter.list_charges(customer["id"]))
+            subscriptions.extend(self.adapter.list_subscriptions(customer["id"]))
 
         buckets: dict[int, list[str]] = {}
         for charge in charges:
@@ -106,6 +109,7 @@ class RunSession:
             charges=charges,
             policy=policy,
             duplicate_charge_ids=duplicates,
+            subscriptions=subscriptions,
         )
 
         # Pin the charges and destinations this run may touch. The gateway
@@ -115,7 +119,13 @@ class RunSession:
         self.state.allowed_destinations = set(allowed) | self.state.allowed_charges
 
         self.audit(
-            "plan", {"facts": self.facts.model_dump(), "customers": len(customers), "charges": len(charges)}
+            "plan",
+            {
+                "facts": self.facts.model_dump(),
+                "customers": len(customers),
+                "charges": len(charges),
+                "subscriptions": len(subscriptions),
+            },
         )
 
     # -------------------------------------------------------------- execution
@@ -148,6 +158,10 @@ class RunSession:
 
     def _run_with(self, facts: ParsedFacts, planner_fn: PlannerFn) -> RunReport:
         self._investigate(facts)
+        # Capture provider state after evidence gathering and before any
+        # execution. For live providers this is the real pre-mutation state;
+        # a pre-investigation snapshot would be empty/stale.
+        self.world_before = self.world.snapshot() if hasattr(self.world, "snapshot") else None
         self.proposed = planner_fn(self.facts, self.resolution, self.ctx)
         if self.proposed is None:
             self.status = "failed"
@@ -258,6 +272,7 @@ class RunSession:
             facts={
                 "customers": self.resolution.customers,
                 "charges": self.resolution.charges,
+                "subscriptions": self.resolution.subscriptions,
                 "policy_hash": (self.resolution.policy or {}).get("hash"),
             },
             untrusted_justification=self.proposed.justification,

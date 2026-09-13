@@ -58,6 +58,34 @@ class AdapterSet:
             "refunded_cents": charge.refunded_cents,
         }
 
+    def list_refunds(self, charge_id: str) -> list[dict[str, Any]]:
+        """Refunds recorded against one charge (fresh read for live Stripe)."""
+        refunds = self.world.stripe.list_refunds(self.tenant_id, charge_id)
+        return [
+            {
+                "id": refund.id,
+                "charge_id": refund.charge_id,
+                "amount_cents": refund.amount_cents,
+                "status": refund.status,
+                "currency": refund.currency,
+                "reason": refund.reason,
+            }
+            for refund in refunds
+        ]
+
+    def list_subscriptions(self, customer_id: str) -> list[dict[str, Any]]:
+        """Subscription state is evidence-only in v1 (no policy rules).
+
+        A provider error (for example a restricted key without subscription
+        read) degrades to empty evidence rather than failing the refund path.
+        """
+        if not hasattr(self.world.stripe, "list_subscriptions"):
+            return []
+        try:
+            return self.world.stripe.list_subscriptions(self.tenant_id, customer_id)
+        except Exception:  # noqa: BLE001 - evidence-only; never blocks the run
+            return []
+
     def read_policy(self, file_id: str) -> dict[str, Any] | None:
         document = self.world.drive.get_document(self.tenant_id, file_id)
         if document is None:
@@ -87,6 +115,8 @@ class AdapterSet:
                 params["charge_id"],
                 int(params["amount_cents"]),
                 idempotency_key or f"{params['charge_id']}:{params['amount_cents']}",
+                run_id=self.ctx.run_id,
+                reason=str(params.get("reason", "")),
             )
             return {"refund": result}
         if tool == "crm.note":

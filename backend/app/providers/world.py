@@ -30,6 +30,28 @@ class Charge:
     tenant_id: str
     status: str = "succeeded"
     refunded_cents: int = 0
+    currency: str = "usd"
+    created: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RefundRecord:
+    """One refund against one charge.
+
+    Kept provider-agnostic so the verifier can assert the exact same outcomes
+    against the in-process twin, an Arga digital twin, or live Stripe.
+    """
+
+    id: str
+    charge_id: str
+    amount_cents: int
+    tenant_id: str
+    status: str = "succeeded"
+    currency: str = "usd"
+    reason: str = ""
+    created: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -65,12 +87,15 @@ class Document:
 class StripeTwin:
     """Billing twin with idempotent refunds and injectable failures."""
 
+    supports_failure_injection = True
+
     def __init__(self, world: World) -> None:
         self._world = world
         self.failures_remaining = 0
         self.failure_status = 500
         self.fail_refund_remaining = 0
         self._refund_keys: dict[str, str] = {}
+        self.refunds: list[RefundRecord] = []
 
     def list_customers(
         self, tenant_id: str, email: str | None = None, name: str | None = None
@@ -109,7 +134,14 @@ class StripeTwin:
         return None
 
     def refund(
-        self, tenant_id: str, charge_id: str, amount_cents: int, idempotency_key: str
+        self,
+        tenant_id: str,
+        charge_id: str,
+        amount_cents: int,
+        idempotency_key: str,
+        *,
+        run_id: str = "",
+        reason: str = "",
     ) -> dict[str, Any]:
         self._maybe_fail()
         if self.fail_refund_remaining > 0:
@@ -127,7 +159,36 @@ class StripeTwin:
         charge.status = "refunded" if charge.refunded_cents == charge.amount_cents else "partially_refunded"
         refund_id = f"re_{len(self._refund_keys) + 1:04d}"
         self._refund_keys[idempotency_key] = refund_id
+        self.refunds.append(
+            RefundRecord(
+                id=refund_id,
+                charge_id=charge_id,
+                amount_cents=amount_cents,
+                tenant_id=tenant_id,
+                status="succeeded",
+                currency=charge.currency,
+                reason=reason,
+                metadata={"run_id": run_id} if run_id else {},
+            )
+        )
         return {"id": refund_id, "charge_id": charge_id, "amount_cents": amount_cents, "duplicate": False}
+
+    def list_refunds(self, tenant_id: str, charge_id: str) -> list[RefundRecord]:
+        self._maybe_fail()
+        return [
+            refund
+            for refund in self.refunds
+            if refund.tenant_id == tenant_id and refund.charge_id == charge_id
+        ]
+
+    def list_subscriptions(self, tenant_id: str, customer_id: str) -> list[dict[str, Any]]:
+        """Subscriptions are evidence-only; the twin only knows seeded ones."""
+        return [
+            subscription
+            for subscription in self._world.subscriptions
+            if subscription.get("tenant_id") == tenant_id
+            and subscription.get("customer_id") == customer_id
+        ]
 
     def _maybe_fail(self) -> None:
         if self.failures_remaining > 0:
@@ -243,6 +304,7 @@ class World:
         self.contacts: dict[str, Contact] = {}
         self.documents: dict[str, Document] = {}
         self.threads: list[dict[str, Any]] = []
+        self.subscriptions: list[dict[str, Any]] = []
         self.drafts: list[Draft] = []
         self.slack: list[dict[str, Any]] = []
         self.stripe = StripeTwin(self)
@@ -266,6 +328,9 @@ class World:
                 c["tenant_id"],
                 c.get("status", "succeeded"),
                 c.get("refunded_cents", 0),
+                c.get("currency", "usd"),
+                c.get("created"),
+                dict(c.get("metadata", {})),
             )
             for c in seed.get("charges", [])
         }
@@ -286,12 +351,14 @@ class World:
             for d in seed.get("documents", [])
         }
         self.threads = list(seed.get("threads", []))
+        self.subscriptions = list(seed.get("subscriptions", []))
         self.drafts = []
         self.slack = []
         self.stripe.failures_remaining = 0
         self.stripe.failure_status = 500
         self.stripe.fail_refund_remaining = 0
         self.stripe._refund_keys = {}
+        self.stripe.refunds = []
         self.gmail.failures_remaining = 0
         self.slack_api.failures_remaining = 0
 
