@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from app.agent.hybrid import HybridParser, HybridPlanner, source_label
+from types import SimpleNamespace
+
+import httpx
+import pytest
+
+from app.agent.hybrid import HybridParser, HybridPlanner, build_hybrid, source_label
+from app.agent.llm import LLMClient, LLMError, _extract_json
 from app.agent.planner import Resolution
 from app.safety import gateway
 from app.safety.models import Envelope, GatewayState, ParsedFacts, RunContext
@@ -104,3 +110,63 @@ def test_source_label():
     assert source_label(_Llm(), _Llm()) == "llm"
     assert source_label(_Det(), _Llm()) == "llm_fallback"
     assert source_label(_NoClient(), _NoClient()) == "deterministic"
+
+
+def test_extract_json_tolerates_fences_and_prose():
+    assert _extract_json('{"a": 1}') == {"a": 1}
+    assert _extract_json('```json\n{"a": 2}\n```') == {"a": 2}
+    assert _extract_json('Here is the JSON you asked for:\n{"a": 3}\nHope that helps!') == {"a": 3}
+
+
+def test_client_rejects_non_json_body():
+    """A 200 with a plain-text body (e.g. a free-tier budget notice) must fail
+    so the hybrid falls back to the deterministic planner."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="The API key budget has been reached")
+
+    client = LLMClient("https://example.invalid/v1", "", "m", transport=httpx.MockTransport(handler))
+    with pytest.raises(LLMError):
+        client.chat_json("system", "user")
+
+
+def test_build_hybrid_uses_deterministic_parser_by_default():
+    settings = SimpleNamespace(
+        llm_enabled=True,
+        llm_configured=True,
+        llm_parse_enabled=False,
+        llm_base_url="https://example.invalid/v1",
+        llm_api_key="",
+        llm_model="m",
+        llm_timeout_seconds=5,
+    )
+    parser, planner = build_hybrid(settings)
+    assert parser.client is None  # one model call per run
+    assert planner.client is not None
+
+
+def test_llm_provider_presets_resolve():
+    from app.config import Settings
+
+    groq = Settings(llm_enabled=True, llm_provider="groq", llm_api_key="gsk_test")
+    assert groq.llm_base_url_resolved == "https://api.groq.com/openai/v1"
+    assert groq.llm_model_resolved == "llama-3.3-70b-versatile"
+    assert groq.llm_configured is True
+
+    # A key-required provider without a key is not configured (falls back safely).
+    assert Settings(llm_enabled=True, llm_provider="groq").llm_configured is False
+
+    # Keyless free preset is usable with no key.
+    pollinations = Settings(llm_enabled=True, llm_provider="pollinations")
+    assert pollinations.llm_configured is True
+    assert pollinations.llm_key_required is False
+
+    # Explicit overrides win.
+    custom = Settings(
+        llm_provider="custom",
+        llm_base_url="http://localhost:1234/v1",
+        llm_model="local-model",
+        llm_api_key="x",
+    )
+    assert custom.llm_base_url_resolved == "http://localhost:1234/v1"
+    assert custom.llm_configured is True

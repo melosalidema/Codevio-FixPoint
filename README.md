@@ -141,13 +141,20 @@ python -m ruff check .       # lint
 
 ### Enable the LLM planner (optional)
 
-Fixpoint runs with the deterministic planner by default. To use an LLM (any OpenAI-compatible
-endpoint), set `FIXPOINT_LLM_ENABLED=true` plus `FIXPOINT_LLM_BASE_URL`, `FIXPOINT_LLM_API_KEY`
-and `FIXPOINT_LLM_MODEL`. Any model error, timeout or schema violation falls back to the
-deterministic planner automatically (`planner_source` shows `llm` or `llm_fallback`).
-Free OpenAI-compatible options: **Groq** (`https://api.groq.com/openai/v1`,
-`llama-3.3-70b-versatile`) or **GitHub Models** (`https://models.github.ai/inference`,
-`openai/gpt-4o-mini`, using a GitHub token). OpenAI itself no longer offers free API credits.
+Fixpoint runs with the deterministic planner by default. To use an LLM, set
+`FIXPOINT_LLM_ENABLED=true`, a `FIXPOINT_LLM_PROVIDER`, and (for keyed providers) a key:
+
+```bash
+FIXPOINT_LLM_PROVIDER=groq          # pollinations (free/keyless), groq, gemini, github, openai, custom
+FIXPOINT_LLM_API_KEY=gsk_...        # not needed for pollinations
+```
+
+Presets fill the base URL and model; override with `FIXPOINT_LLM_BASE_URL`/`FIXPOINT_LLM_MODEL`
+or use `provider=custom` (LM Studio, Ollama, vLLM). Any model error, timeout or schema
+violation falls back to the deterministic planner automatically (`planner_source` shows `llm`
+or `llm_fallback`). OpenAI no longer offers free API credits; **Groq** (free, no card) is
+recommended. The deterministic parser is used by default (one model call per run); set
+`FIXPOINT_LLM_PARSE_ENABLED=true` to also extract facts with the model.
 
 A local mock is included so you can demo/test the wiring with no keys:
 

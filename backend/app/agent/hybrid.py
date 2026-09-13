@@ -70,20 +70,21 @@ class HybridPlanner:
 def build_client(settings: Any) -> LLMClient | None:
     if not settings.llm_enabled or not settings.llm_configured:
         return None
+    base_url = getattr(settings, "llm_base_url_resolved", settings.llm_base_url)
+    model = getattr(settings, "llm_model_resolved", settings.llm_model)
     try:
-        return LLMClient(
-            settings.llm_base_url,
-            settings.llm_api_key,
-            settings.llm_model,
-            settings.llm_timeout_seconds,
-        )
+        return LLMClient(base_url, settings.llm_api_key, model, settings.llm_timeout_seconds)
     except Exception:  # noqa: BLE001 - misconfiguration disables the LLM, not the app
         return None
 
 
 def build_hybrid(settings: Any) -> tuple[HybridParser, HybridPlanner]:
     client = build_client(settings)
-    return HybridParser(client), HybridPlanner(client)
+    # The quarantine parser stays deterministic by default (a security property
+    # and it halves the number of model calls, which matters on free tiers).
+    # Enable FIXPOINT_LLM_PARSE_ENABLED=true to also extract with the model.
+    parser_client = client if getattr(settings, "llm_parse_enabled", False) else None
+    return HybridParser(parser_client), HybridPlanner(client)
 
 
 def source_label(parser: HybridParser, planner: HybridPlanner) -> str:

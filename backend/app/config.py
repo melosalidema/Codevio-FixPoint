@@ -7,6 +7,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.safety.models import Envelope
 
+# Built-in OpenAI-compatible providers. (base_url, default_model, key_required).
+# Override base_url/model individually, or use provider "custom".
+LLM_PRESETS: dict[str, tuple[str, str, bool]] = {
+    # Free and keyless, but rate/budget limited. Works best from a home IP.
+    "pollinations": ("https://text.pollinations.ai/openai", "openai", False),
+    # Free with an instant key (no credit card) - recommended for a reliable demo.
+    "groq": ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile", True),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.5-flash", True),
+    "github": ("https://models.github.ai/inference", "openai/gpt-4o-mini", True),
+    "openai": ("https://api.openai.com/v1", "gpt-4o-mini", True),
+    "custom": ("", "", True),
+}
+
 
 class Settings(BaseSettings):
     """Environment-driven configuration.
@@ -68,11 +81,16 @@ class Settings(BaseSettings):
     # planner are used: fully offline and replayable. When enabled, the model
     # only proposes; the deterministic Action Gateway still authorizes, and any
     # LLM error falls back to the deterministic planner.
+    #
+    # Default provider is Pollinations, which is free and keyless; point these at
+    # any OpenAI-compatible endpoint (Groq, GitHub Models, OpenAI, local) instead.
     llm_enabled: bool = False
+    llm_parse_enabled: bool = False
+    llm_provider: str = "pollinations"
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = ""
-    llm_timeout_seconds: float = 20.0
+    llm_timeout_seconds: float = 45.0
 
     # Provider backend: "twin" (in-process deterministic twins, default) or
     # "arga" (Arga digital twins over HTTP).
@@ -90,8 +108,26 @@ class Settings(BaseSettings):
     arga_drive_token: str = ""
 
     @property
+    def llm_preset(self) -> tuple[str, str, bool]:
+        return LLM_PRESETS.get(self.llm_provider, LLM_PRESETS["custom"])
+
+    @property
+    def llm_base_url_resolved(self) -> str:
+        return self.llm_base_url or self.llm_preset[0]
+
+    @property
+    def llm_model_resolved(self) -> str:
+        return self.llm_model or self.llm_preset[1]
+
+    @property
+    def llm_key_required(self) -> bool:
+        return self.llm_preset[2]
+
+    @property
     def llm_configured(self) -> bool:
-        return bool(self.llm_base_url and self.llm_api_key and self.llm_model)
+        if not (self.llm_base_url_resolved and self.llm_model_resolved):
+            return False
+        return bool(self.llm_api_key) or not self.llm_key_required
 
     @property
     def arga_configured(self) -> bool:

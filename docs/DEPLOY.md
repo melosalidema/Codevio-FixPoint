@@ -10,37 +10,44 @@ The LLM parser/planner is already implemented and env-gated. It only *proposes*;
 deterministic Action Gateway still authorizes, and **any** LLM error/timeout/schema
 violation falls back to the deterministic planner (visible as `planner_source`).
 
-Set these (shell, or a gitignored `backend/.env`):
+The quickest reliable free path is a provider key — set the provider and the key, nothing else.
 
-| Variable | Example | Notes |
+| Variable | Required | Notes |
 | --- | --- | --- |
-| `FIXPOINT_LLM_ENABLED` | `true` | must be `true` |
-| `FIXPOINT_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
-| `FIXPOINT_LLM_API_KEY` | `sk-...` | required, non-empty |
-| `FIXPOINT_LLM_MODEL` | `gpt-4o-mini` | model id |
-| `FIXPOINT_LLM_TIMEOUT_SECONDS` | `20` | fallback after this |
+| `FIXPOINT_LLM_ENABLED` | yes | `true` |
+| `FIXPOINT_LLM_PROVIDER` | yes | `pollinations`, `groq`, `gemini`, `github`, `openai`, `custom` |
+| `FIXPOINT_LLM_API_KEY` | for keyed providers | not needed for `pollinations` |
+| `FIXPOINT_LLM_BASE_URL` / `FIXPOINT_LLM_MODEL` | `custom` only (or to override) | explicit endpoint/model |
+| `FIXPOINT_LLM_TIMEOUT_SECONDS` | no | default `45` |
+| `FIXPOINT_LLM_PARSE_ENABLED` | no | default `false`; keeps the deterministic parser (one model call per run) |
 
-Provider examples:
+Built-in presets:
 
-| Provider | Base URL | Example model | Free? |
-| --- | --- | --- | --- |
-| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` | no (min $5 prepay) |
-| LM Studio (local) | `http://localhost:1234/v1` | loaded model id | yes (local) |
-| Ollama (local) | `http://localhost:11434/v1` | `llama3.1` | yes (local) |
-| **Groq** | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` | **yes, no card, fast** |
-| **GitHub Models** | `https://models.github.ai/inference` | `openai/gpt-4o-mini` | **yes (GitHub PAT)** |
-| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-2.5-flash` | yes (trains on free data) |
-| Cerebras | `https://api.cerebras.ai/v1` | `gpt-oss-120b` | yes |
-| Mistral | `https://api.mistral.ai/v1` | `mistral-small-latest` | yes (2 req/min) |
-| OpenRouter | `https://openrouter.ai/api/v1` | `...:free` models | yes (limited) |
-| NVIDIA NIM | `https://integrate.api.nvidia.com/v1` | `meta/llama-3.3-70b-instruct` | yes |
+| Provider | Base URL | Default model | Key? | Notes |
+| --- | --- | --- | --- | --- |
+| `pollinations` | `https://text.pollinations.ai/openai` | `openai` | no | free/keyless, rate/budget limited |
+| `groq` | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` | yes | **recommended: free, no card, fast** |
+| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-2.5-flash` | yes | free tier; trains on free data |
+| `github` | `https://models.github.ai/inference` | `openai/gpt-4o-mini` | yes (GitHub PAT) | free; not for production |
+| `openai` | `https://api.openai.com/v1` | `gpt-4o-mini` | yes | no free tier (min $5) |
+| `custom` | (you provide) | (you provide) | depends | LM Studio, Ollama, vLLM, etc. |
 
-**Note:** OpenAI discontinued automatic free trial credits in mid-2025; new accounts get
-none and there is no usable free OpenAI tier. For a free demo use **Groq** or **GitHub
-Models** (both OpenAI-compatible). Sites selling "free OpenAI keys" are reselling
-shared/leaked keys — do not use them. Free tiers differ in whether they train on your
-prompts (Groq: no; Gemini free: yes); Fixpoint prompts contain customer email/charges, so
-prefer Groq or a local model for real data.
+**Recommended free setup (Groq, no credit card):** create a key at console.groq.com, then:
+
+```powershell
+$env:FIXPOINT_LLM_ENABLED="true"
+$env:FIXPOINT_LLM_PROVIDER="groq"
+$env:FIXPOINT_LLM_API_KEY="gsk_..."
+```
+
+**Keyless (no signup):** `FIXPOINT_LLM_PROVIDER=pollinations` with no key — works but the
+public endpoint is shared and rate/budget limited, so it may fall back to the deterministic
+planner. **Local:** `provider=custom`, `base_url=http://localhost:1234/v1`, `model=<id>`.
+
+**Note:** OpenAI discontinued free API credits in mid-2025; there is no usable free OpenAI
+tier. Sites selling "free OpenAI keys" resell shared/leaked keys — do not use them. Free
+tiers differ on training data (Groq: no; Gemini free: yes); Fixpoint prompts contain customer
+email/charges, so prefer Groq or a local model for real data.
 
 ### Demo/CI without a model (mock)
 
@@ -48,7 +55,8 @@ prefer Groq or a local model for real data.
 cd backend
 python -m scripts.mock_llm_server --port 8123
 # in another shell:
-FIXPOINT_LLM_ENABLED=true FIXPOINT_LLM_BASE_URL=http://localhost:8123/v1 \
+FIXPOINT_LLM_ENABLED=true FIXPOINT_LLM_PROVIDER=custom \
+FIXPOINT_LLM_BASE_URL=http://localhost:8123/v1 \
 FIXPOINT_LLM_API_KEY=mock FIXPOINT_LLM_MODEL=mock-llm \
 python -m uvicorn app.main:app --port 8000
 ```

@@ -13,6 +13,7 @@ etc. No SDK is required.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from typing import Any
 
@@ -22,6 +23,22 @@ from pydantic import ValidationError
 from app.agent.parser import parse
 from app.agent.planner import Resolution
 from app.safety.models import ParsedFacts, ProposedAction, RunContext
+
+# Free tiers (e.g. Pollinations anonymous) allow a single in-flight request per
+# IP. Space all model HTTP calls so two calls in one run cannot collide.
+_MIN_INTERVAL_SECONDS = 2.5
+_RATE_LOCK = threading.Lock()
+_LAST_CALL_AT = 0.0
+
+
+def _throttle() -> None:
+    global _LAST_CALL_AT
+    with _RATE_LOCK:
+        now = time.perf_counter()
+        wait = _MIN_INTERVAL_SECONDS - (now - _LAST_CALL_AT)
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_CALL_AT = time.perf_counter()
 
 
 class LLMError(RuntimeError):
@@ -37,21 +54,58 @@ def _strip_code_fences(content: str) -> str:
     return text.strip()
 
 
-class LLMClient:
-    """Minimal OpenAI-compatible JSON chat client with usage capture."""
+def _extract_json(content: str) -> dict[str, Any]:
+    """Parse JSON, tolerating code fences and leading/trailing prose."""
+    text = _strip_code_fences(content)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return json.loads(text[start : end + 1])
+        except json.JSONDecodeError as error:
+            raise LLMError(f"invalid_json: {error}") from error
+    raise LLMError("invalid_json: no object found")
 
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 20.0) -> None:
-        if not base_url or not api_key or not model:
+
+class LLMClient:
+    """Minimal OpenAI-compatible JSON chat client with usage capture.
+
+    ``api_key`` is optional so keyless free endpoints (for example Pollinations)
+    work out of the box.
+    """
+
+    # Providers that gate ``response_format`` answer with one of these; retry plain.
+    _RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str = "",
+        model: str = "",
+        timeout: float = 20.0,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        if not base_url or not model:
             raise LLMError("llm_not_configured")
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
+        self.transport = transport
         self.last_meta: dict[str, Any] = {}
 
     def chat_json(self, system: str, user: str) -> dict[str, Any]:
         url = f"{self.base_url}/chat/completions"
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        # No response_format: many free tiers reject it, and the prompts already
+        # demand JSON (``_extract_json`` tolerates fencing/prose). This also halves
+        # the request count so single-slot free tiers do not rate-limit us.
         body: dict[str, Any] = {
             "model": self.model,
             "temperature": 0,
@@ -61,14 +115,15 @@ class LLMClient:
             ],
         }
         started = time.perf_counter()
-        response = self._post(url, headers, {**body, "response_format": {"type": "json_object"}})
-        if response.status_code in (400, 404, 422):
-            # Some providers reject response_format; retry once without it.
-            response = self._post(url, headers, body)
+        response = self._post_with_retry(url, headers, body)
         if response.status_code >= 400:
             raise LLMError(f"http_{response.status_code}: {response.text[:200]}")
 
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as error:
+            # e.g. a free-tier budget notice returned as text with HTTP 200.
+            raise LLMError(f"invalid_json: {response.text[:120]}") from error
         try:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as error:
@@ -81,16 +136,33 @@ class LLMClient:
             "completion_tokens": usage.get("completion_tokens"),
             "latency_ms": int((time.perf_counter() - started) * 1000),
         }
-        try:
-            return json.loads(_strip_code_fences(content))
-        except json.JSONDecodeError as error:
-            raise LLMError(f"invalid_json: {error}") from error
+        return _extract_json(content)
 
     def _post(self, url: str, headers: dict[str, str], body: dict[str, Any]) -> httpx.Response:
+        _throttle()
         try:
+            if self.transport is not None:
+                with httpx.Client(transport=self.transport, timeout=self.timeout) as client:
+                    return client.post(url, headers=headers, json=body)
             return httpx.post(url, headers=headers, json=body, timeout=self.timeout)
         except httpx.HTTPError as error:
             raise LLMError(f"transport_error: {error}") from error
+
+    def _post_with_retry(
+        self, url: str, headers: dict[str, str], body: dict[str, Any], attempts: int = 3
+    ) -> httpx.Response:
+        """Retry transient throttling/5xx (free tiers often answer 429)."""
+        last: httpx.Response | None = None
+        for index in range(attempts):
+            response = self._post(url, headers, body)
+            if response.status_code in self._RETRY_STATUSES:
+                last = response
+                if index < attempts - 1:
+                    time.sleep(1.5 * (index + 1))
+                continue
+            return response
+        assert last is not None
+        return last
 
 
 _PARSE_SYSTEM = (
