@@ -16,6 +16,13 @@ This repository is a production-ready build of `docs/fixpoint-plan.html`:
 - **Safety core** — Action Gateway, HMAC approvals, hash-chained audit log, independent verifier
 - **Evaluation** — the S1–S16 security & reliability matrix with a PASS / FAIL / unsafe-blocked scoreboard
 
+## Demo video
+
+The 2:49 candidate submission recording is documented in [`docs/DEMO_VIDEO.md`](docs/DEMO_VIDEO.md).
+The original high-resolution MP4 remains local-only because committing a 147 MB binary would make
+cloning, pushes, and deployment unreliable. Replace the hosting placeholder in that file with the
+final public video URL before submission.
+
 ---
 
 ## Safety model
