@@ -145,6 +145,9 @@ Fixpoint runs with the deterministic planner by default. To use an LLM (any Open
 endpoint), set `FIXPOINT_LLM_ENABLED=true` plus `FIXPOINT_LLM_BASE_URL`, `FIXPOINT_LLM_API_KEY`
 and `FIXPOINT_LLM_MODEL`. Any model error, timeout or schema violation falls back to the
 deterministic planner automatically (`planner_source` shows `llm` or `llm_fallback`).
+Free OpenAI-compatible options: **Groq** (`https://api.groq.com/openai/v1`,
+`llama-3.3-70b-versatile`) or **GitHub Models** (`https://models.github.ai/inference`,
+`openai/gpt-4o-mini`, using a GitHub token). OpenAI itself no longer offers free API credits.
 
 A local mock is included so you can demo/test the wiring with no keys:
 

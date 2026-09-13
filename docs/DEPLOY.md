@@ -22,12 +22,25 @@ Set these (shell, or a gitignored `backend/.env`):
 
 Provider examples:
 
-| Provider | Base URL | Key |
-| --- | --- | --- |
-| OpenAI | `https://api.openai.com/v1` | `sk-...` |
-| LM Studio (local) | `http://localhost:1234/v1` | any (e.g. `lm-studio`) |
-| Ollama (local) | `http://localhost:11434/v1` | `ollama` |
-| OpenRouter / Together / vLLM | their `/v1` | their key |
+| Provider | Base URL | Example model | Free? |
+| --- | --- | --- | --- |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` | no (min $5 prepay) |
+| LM Studio (local) | `http://localhost:1234/v1` | loaded model id | yes (local) |
+| Ollama (local) | `http://localhost:11434/v1` | `llama3.1` | yes (local) |
+| **Groq** | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` | **yes, no card, fast** |
+| **GitHub Models** | `https://models.github.ai/inference` | `openai/gpt-4o-mini` | **yes (GitHub PAT)** |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-2.5-flash` | yes (trains on free data) |
+| Cerebras | `https://api.cerebras.ai/v1` | `gpt-oss-120b` | yes |
+| Mistral | `https://api.mistral.ai/v1` | `mistral-small-latest` | yes (2 req/min) |
+| OpenRouter | `https://openrouter.ai/api/v1` | `...:free` models | yes (limited) |
+| NVIDIA NIM | `https://integrate.api.nvidia.com/v1` | `meta/llama-3.3-70b-instruct` | yes |
+
+**Note:** OpenAI discontinued automatic free trial credits in mid-2025; new accounts get
+none and there is no usable free OpenAI tier. For a free demo use **Groq** or **GitHub
+Models** (both OpenAI-compatible). Sites selling "free OpenAI keys" are reselling
+shared/leaked keys — do not use them. Free tiers differ in whether they train on your
+prompts (Groq: no; Gemini free: yes); Fixpoint prompts contain customer email/charges, so
+prefer Groq or a local model for real data.
 
 ### Demo/CI without a model (mock)
 
