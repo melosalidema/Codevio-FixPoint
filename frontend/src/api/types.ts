@@ -132,6 +132,7 @@ export interface ConfigResponse {
   version: string;
   default_tenant_id: string;
   llm_enabled: boolean;
+  llm_model: string;
   provider_backend: string;
   envelope: Envelope;
 }

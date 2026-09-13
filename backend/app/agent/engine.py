@@ -154,6 +154,16 @@ class RunSession:
             self._audit_log_append(LedgerType.PROPOSAL, {"action": None, "reason": "no_actionable_remedy"})
             return self._finalize(expect_no_mutation=True, outcome="no_actionable_remedy")
 
+        # Untrusted content can never redirect money. If the request named a
+        # destination, make sure the gateway always sees it even when the
+        # planner omitted the field, so it is pinned or rejected deterministically.
+        if (
+            "refund" in self.proposed.tool
+            and self.facts.destination
+            and "destination" not in self.proposed.params
+        ):
+            self.proposed.params["destination"] = self.facts.destination
+
         self._audit_log_append(LedgerType.PROPOSAL, {"action": self.proposed.model_dump()})
 
         if self.resolution.ambiguous and "refund" in self.proposed.tool:

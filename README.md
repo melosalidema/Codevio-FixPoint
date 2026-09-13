@@ -139,6 +139,28 @@ python -m app.evals.runner   # S1-S16 matrix, 16/16 PASS expected
 python -m ruff check .       # lint
 ```
 
+### Enable the LLM planner (optional)
+
+Fixpoint runs with the deterministic planner by default. To use an LLM (any OpenAI-compatible
+endpoint), set `FIXPOINT_LLM_ENABLED=true` plus `FIXPOINT_LLM_BASE_URL`, `FIXPOINT_LLM_API_KEY`
+and `FIXPOINT_LLM_MODEL`. Any model error, timeout or schema violation falls back to the
+deterministic planner automatically (`planner_source` shows `llm` or `llm_fallback`).
+
+A local mock is included so you can demo/test the wiring with no keys:
+
+```bash
+cd backend
+python -m scripts.mock_llm_server --port 8123     # shell 1
+# shell 2:
+FIXPOINT_LLM_ENABLED=true \
+FIXPOINT_LLM_BASE_URL=http://localhost:8123/v1 \
+FIXPOINT_LLM_API_KEY=mock \
+FIXPOINT_LLM_MODEL=mock-llm \
+python -m uvicorn app.main:app --port 8000
+```
+
+See [`docs/DEPLOY.md`](docs/DEPLOY.md) for real providers, Railway deployment and Postgres.
+
 ---
 
 ## API reference

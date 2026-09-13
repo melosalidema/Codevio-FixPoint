@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 
+import { useConfig } from "../api/hooks";
 import { cn } from "../lib/cn";
 
 function useHealth() {
@@ -36,6 +37,12 @@ const NAV_LINKS = [
 
 export function Layout() {
   const up = useHealth();
+  const config = useConfig();
+  const planner = config.data
+    ? config.data.llm_enabled
+      ? `llm${config.data.llm_model ? ` · ${config.data.llm_model}` : ""}`
+      : "deterministic"
+    : null;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -80,23 +87,38 @@ export function Layout() {
             </a>
           </nav>
 
-          <div
-            className={cn(
-              "ml-auto flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium",
-              up === null && "border-slate-700 text-slate-400",
-              up === true && "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
-              up === false && "border-rose-500/40 bg-rose-500/10 text-rose-300",
+          <div className="ml-auto flex items-center gap-2">
+            {planner && (
+              <div
+                className={cn(
+                  "flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium",
+                  config.data?.llm_enabled
+                    ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-200"
+                    : "border-slate-700 text-slate-400",
+                )}
+                title="Active planner: LLM (with deterministic fallback) or deterministic"
+              >
+                planner: {planner}
+              </div>
             )}
-          >
-            <span
+            <div
               className={cn(
-                "h-2 w-2 rounded-full",
-                up === null && "animate-pulse-soft bg-slate-500",
-                up === true && "bg-emerald-400",
-                up === false && "bg-rose-400",
+                "flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium",
+                up === null && "border-slate-700 text-slate-400",
+                up === true && "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+                up === false && "border-rose-500/40 bg-rose-500/10 text-rose-300",
               )}
-            />
-            {up === null ? "checking" : up ? "control plane up" : "offline"}
+            >
+              <span
+                className={cn(
+                  "h-2 w-2 rounded-full",
+                  up === null && "animate-pulse-soft bg-slate-500",
+                  up === true && "bg-emerald-400",
+                  up === false && "bg-rose-400",
+                )}
+              />
+              {up === null ? "checking" : up ? "control plane up" : "offline"}
+            </div>
           </div>
         </div>
       </header>

@@ -89,12 +89,18 @@ def test_llm_proposal_is_still_gated_by_the_gateway():
 
 
 def test_source_label():
-    class _LlM:
+    class _Llm:
         last_source = "llm"
+        client = object()
 
     class _Det:
         last_source = "deterministic"
+        client = object()
 
-    assert source_label(_LlM(), _LlM()) == "llm"
-    assert source_label(_Det(), _Det()) == "deterministic"
-    assert source_label(_LlM(), _Det()) == "llm_fallback"
+    class _NoClient:
+        last_source = "deterministic"
+        client = None
+
+    assert source_label(_Llm(), _Llm()) == "llm"
+    assert source_label(_Det(), _Llm()) == "llm_fallback"
+    assert source_label(_NoClient(), _NoClient()) == "deterministic"

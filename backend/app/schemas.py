@@ -41,6 +41,7 @@ class ConfigResponse(BaseModel):
     version: str
     default_tenant_id: str
     llm_enabled: bool = False
+    llm_model: str = ""
     provider_backend: str = "twin"
     envelope: EnvelopeOut
 

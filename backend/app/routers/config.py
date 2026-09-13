@@ -16,12 +16,14 @@ async def config(settings: AppSettings) -> ConfigResponse:
     numbers the gateway enforces.
     """
     envelope = settings.envelope
+    llm_active = settings.llm_enabled and settings.llm_configured
     return ConfigResponse(
         demo_mode=settings.demo_mode,
         env=settings.env,
         version=settings.version,
         default_tenant_id=settings.default_tenant_id,
-        llm_enabled=settings.llm_enabled and settings.llm_configured,
+        llm_enabled=llm_active,
+        llm_model=settings.llm_model if llm_active else "",
         provider_backend=settings.provider_backend,
         envelope=EnvelopeOut(**envelope.model_dump(exclude={"forbidden_ops"})),
     )

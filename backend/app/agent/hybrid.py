@@ -87,10 +87,11 @@ def build_hybrid(settings: Any) -> tuple[HybridParser, HybridPlanner]:
 
 
 def source_label(parser: HybridParser, planner: HybridPlanner) -> str:
-    parser_used = "llm" if parser.last_source == "llm" else "det"
-    planner_used = "llm" if planner.last_source == "llm" else "det"
-    if parser_used == "llm" and planner_used == "llm":
-        return "llm"
-    if parser_used == "det" and planner_used == "det":
+    llm_configured = (
+        getattr(parser, "client", None) is not None or getattr(planner, "client", None) is not None
+    )
+    if not llm_configured:
         return "deterministic"
+    if parser.last_source == "llm" and planner.last_source == "llm":
+        return "llm"
     return "llm_fallback"
