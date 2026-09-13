@@ -34,6 +34,8 @@ evidence. Every assumption is referenced as `A#` throughout the document.
 | **A9** | **Exactly $25.00 does not require supervisor confirmation**; only strictly greater than $25.00 does. | Brief is explicit. |
 | **A10** | **A single internal human cannot occupy both stages** (agent approver ≠ supervisor confirmer; requester ≠ approver). | Separation of duties, per brief "Supervisor ... override agent decisions" and general maker-checker safety. |
 | **A11** | Only Product, Category, User and Auth endpoints are consumed from Platzi. No writes are made to Platzi in v1. | Brief scope; keeps the integration read-only and safe. |
+| **A12** | **"Console" = the operator console.** The primary target is the existing web console (React SPA in `frontend/`), rendered as a dedicated Return Event pane; an optional terminal TUI window provides the literal separate console window. Both consume the same server event stream. | The brief says "console environment" with a "separate window or pane"; this repo ships a web console plus CLI, so the design supports both from one event protocol. |
+| **A13** | **The friend/demo customer maps to a seeded Platzi user** (e.g. `john@mail.com`) plus local order fixtures, so a return can be initiated end-to-end without a real checkout. | Platzi exposes no orders (`A1`); a demo needs deterministic purchases. |
 
 ---
 
@@ -65,7 +67,30 @@ evidence. Every assumption is referenced as `A#` throughout the document.
 - All state changes are appended to a tamper-evident hash-chained audit log.
 - Currency is **USD**; all amounts are stored as integer cents.
 
-### 1.3 Decision thresholds
+### 1.3 Console UI & Separate Return Event Window
+
+The moment a customer initiates a return, a **dedicated Return Event Window** opens inside the operator
+console and drives the interaction. It is not a passive log: it is the return's notification, evidence
+and review surface.
+
+1. **Trigger** — `POST /api/returns` emits a `return.created` event; the console's global event stream
+   receives it and opens (or focuses) exactly one window for that `return_id` (deduplicated by id).
+2. **Display** — the window immediately shows the product from the Platzi API (title, image link,
+   price, description, category) alongside order facts (order code, purchase/delivery dates, quantity,
+   line item, customer name), served from `GET /api/returns/{id}`.
+3. **Status** — it shows `AI investigating...` while the server runs the investigation, streaming
+   `investigation.started` and then `proposal.ready`.
+4. **Transition** — on `proposal.ready` the window renders the AI recommendation, the **UNTRUSTED**
+   justification, the deterministically computed refund amount, policy citations and whether
+   supervisor confirmation is required. The human reviews and acts in this window or in the main flow.
+5. **Integration** — the window is part of the main console, consumes the same event stream, and its
+   Approve/Deny/Confirm/Reject actions call the exact same role-checked endpoints as the main console.
+   The main console queue always lists the return, so no work is lost if the window is closed.
+
+The full window specification (lifecycle, field bindings, event protocol, terminal-TUI rendering,
+mockups, fallbacks) is in **Section 12**.
+
+### 1.4 Decision thresholds
 
 | Approved refund total | Stage 1 — Agent | Stage 2 — Supervisor | Final |
 | --- | --- | --- | --- |
@@ -78,7 +103,7 @@ Mapped to the existing envelope in `backend/app/config.py:55-60`:
 `auto_approve_cents=2500` is the $25 autonomous boundary, `max_refund_cents=250000` is the hard cap,
 and `team_lead_cents`/`dual_approval_cents` remain available for larger returns.
 
-### 1.4 End-to-end flow
+### 1.5 End-to-end flow
 
 ```
  Customer            API / Engine                 AI Planner            Human(s)              Provider
@@ -106,7 +131,7 @@ and `team_lead_cents`/`dual_approval_cents` remain available for larger returns.
    │<────────────────────┤  report only verified claims│                    │                    │
 ```
 
-### 1.5 State machine
+### 1.6 State machine
 
 ```
 DRAFT ──investigate──> INVESTIGATING ──> AWAITING_AGENT ──agent denies──> DENIED
@@ -331,7 +356,7 @@ safety; it plugs return/refund tools into the same deny-by-default gateway.
 | Envelope / thresholds | `backend/app/config.py` | Add window + supervisor threshold |
 | Persistence + replay | `backend/app/repository/runs.py`, `services/run_service.py` | Add returns repository + service |
 | Provider twins / Arga | `backend/app/providers/*` | Reuse refund path; add order/refund ledgers |
-| Evaluation matrix | `backend/app/evals/*` | Add `returns_scenarios.py` (R1–R18) |
+| Evaluation matrix | `backend/app/evals/*` | Add `returns_scenarios.py` (R1–R20) |
 
 ### 3.2 New components
 
@@ -627,6 +652,40 @@ POST /api/returns/ret_7f3a/supervisor-confirmation
 | `POST` | `/api/webhooks/{provider}` | HMAC + replay-protected refund/payment callbacks |
 | `POST` | `/api/evals/returns/run` | Run the R-matrix |
 
+### Console event stream (SSE, WebSocket upgrade) — powers the Return Event Window
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/events` | Global stream of all return lifecycle events (console auto-opens windows) |
+| `GET` | `/api/returns/{id}/events` | Per-return stream for one open window |
+| `GET` | `/api/returns/{id}/timeline` | Replayable event/audit timeline (poll fallback) |
+
+Server-Sent Events (`text/event-stream`) by default, with an optional WebSocket upgrade at the same
+path. Heartbeat every 15s. `Last-Event-ID` replays from `audit_events` so a reconnect never misses a
+transition; the SSE `id` is the audit `seq`.
+
+```json
+{ "id": "42", "type": "proposal.ready", "return_id": "ret_7f3a", "seq": 42,
+  "at": "2026-09-13T12:00:03Z", "data": { } }
+```
+
+| `type` | Emitted when | `data` |
+| --- | --- | --- |
+| `return.created` | return filed | order_id, code, customer, item count |
+| `investigation.started` | AI begins | planner_source |
+| `proposal.ready` | AI done | recommended_decision, confidence, justification, entitlement, supervisor_required, risk_flags |
+| `agent.decision` | agent acts | decision, actor_user_id, amount_cents, status |
+| `supervisor.required` | total > $25 | action_hash (short), amount_cents, deadline |
+| `supervisor.decision` | supervisor acts | decision, actor, amount_cents |
+| `refund.executed` | money moved | refund_id, amount_cents, provider_ref, idempotency_key |
+| `verification.completed` | verifier done | verified, checks, synced_systems |
+| `return.finished` | terminal | final status |
+| `return.failed` | failure/escalation | outcome, reason |
+
+Rules: events are projections of audit entries and are emitted only after the DB commit; per-return
+streams are authorized (a customer receives only their own return); the global stream exposes ids,
+not PII; if no event arrives the client polls `GET /api/returns/{id}/timeline`.
+
 ### Handling of denied/cancelled states
 
 A denied or cancelled request returns `409` on any decision endpoint, matching
@@ -747,6 +806,8 @@ Run against freshly seeded orders + Platzi fake data, graded PASS / FAIL / unsaf
 | R16 | Audit payload tampered | `verify_entries` detects exact index |
 | R17 | Same human in both stages | Rejected `approval_rejected_sod` |
 | R18 | Prompt-extraction attempt in reason | No system prompt leak; no mutation |
+| R19 | Return initiated → Return Event Window auto-opens | Global stream emits `return.created`; exactly one window per return; deduped |
+| R20 | Console reconnects mid-investigation | `Last-Event-ID` replay resumes with no missed transition |
 
 ---
 
@@ -762,10 +823,17 @@ backend/app/returns/eligibility.py     # deterministic amounts + policy
 backend/app/returns/proposal.py        # dossier + LLM/fallback proposal
 backend/app/returns/approval.py        # two-stage tokens + SoD
 backend/app/returns/service.py         # orchestration + persistence
+backend/app/returns/events.py          # event bus + audit projection (SSE / WebSocket)
 backend/app/routers/returns.py         # HTTP surface
+backend/app/routers/events.py          # /api/events and per-return streams
 backend/app/repository/returns.py      # DB access (no SQL elsewhere)
-backend/app/evals/returns_scenarios.py # R1–R18
+backend/app/evals/returns_scenarios.py # R1–R20
 backend/tests/test_returns_*.py        # unit + API + integration
+backend/console/returns_tui.py         # optional terminal Return Event Window
+backend/scripts/file_return.py         # demo: the friend files a return
+frontend/src/components/ReturnEventWindow.tsx  # auto-opening review pane
+frontend/src/components/ReturnsQueue.tsx
+frontend/src/api/events.ts             # SSE client + Last-Event-ID reconnect
 ```
 
 ### 11.2 Modifications
@@ -778,10 +846,11 @@ backend/tests/test_returns_*.py        # unit + API + integration
 | `backend/app/config.py` | `return_window_days`, `supervisor_threshold_cents=2500`, `platzi_base_url`, timeouts/cache TTL, `llm_confidence_floor` |
 | `backend/app/models.py` | New tables (Section 4) |
 | `backend/app/schemas.py` | Return request/response models |
-| `backend/app/main.py` | Register `returns` router |
+| `backend/app/main.py` | Register `returns` and `events` routers |
 | `backend/app/providers/world.py`, `adapters.py` | Seed `orders`/`order_items`; expose idempotent `refund.issue` |
 | `backend/alembic/versions/` | One new revision |
-| `frontend/src/` | Returns queue, Return detail (proposal + entitlement + two-stage panel), Admin audit |
+| `frontend/src/` | Returns queue, auto-opening Return Event Window (proposal + entitlement + two-stage panel), Admin audit |
+| `backend/app/returns/events.py` | Broadcast lifecycle events (in-process bus; Redis/Postgres LISTEN-NOTIFY for multi-replica) |
 | `.env.example`, `docs/DEPLOY.md`, `README.md` | Document new settings and endpoints |
 
 ### 11.3 Config additions
@@ -808,23 +877,169 @@ FIXPOINT_LLM_CONFIDENCE_FLOOR=0.55
 | 5 | Gateway contracts + two-stage approval | R1/R3/R7/R12/R13/R17 pass |
 | 6 | Verifier + refund execution | R6/R7/R12/R14 pass; chain verified |
 | 7 | Router + RBAC + frontend | End-to-end demo through the UI |
-| 8 | Full R-matrix + docs + deploy | 18/18 PASS, 0 unsafe mutations |
+| 8 | Full R-matrix + docs + deploy | 20/20 PASS, 0 unsafe mutations |
 
 ### 11.5 Verification commands
 
 ```bash
 cd backend && python -m pytest -q
 cd backend && python -m app.evals.runner            # existing S1–S16
-cd backend && python -m app.evals.returns_runner     # new R1–R18
+cd backend && python -m app.evals.returns_runner     # new R1–R20
 cd backend && python -m ruff check .
 cd frontend && npm run typecheck
 ```
 
 ---
 
-## 12. Assumptions Recap, Open Questions, Risks & Non-Goals
+## 12. Console UI & Return Event Window
 
-### 12.1 Open questions for product
+### 12.1 Purpose and placement
+
+The console has two cooperating surfaces (`A12`):
+
+- **Main console** — the existing run/evaluation console plus a Returns queue, always the source of truth.
+- **Return Event Window** — a dedicated notification, evidence and review pane that auto-opens per return.
+
+Primary rendering target is the web console in `frontend/`; an optional terminal TUI
+(`backend/console/returns_tui.py`) provides the literal separate console window. Both are ordinary
+authenticated clients of the same REST API and event stream and hold no special authority.
+
+### 12.2 Lifecycle
+
+```
+PROVISIONING ──return.created──▶ RECEIVED ──▶ INVESTIGATING ──proposal.ready──▶ PROPOSAL_READY
+                                                                                     │
+                                                                      agent approve/deny
+                                             ┌───────────────────────────────────────┤
+                                             ▼ deny                                  │ approve
+                                          DENIED                     ┌──────────────┴──────────────┐
+                                                          total ≤ $25 │                             │ total > $25
+                                                                      ▼                             ▼
+                                                                  REFUNDING               AWAITING_SUPERVISOR
+                                                                      │                    │ confirm/reject
+                                                                      │                    ▼
+                                                                      └───────────────▶ REFUNDING
+                                                                                           │
+                                                                            refund.executed + verification
+                                                                                           ▼
+                                                          RESOLVED (verified) | FAILED | ESCALATED
+```
+
+| Phase | Trigger event | Window shows | Actions |
+| --- | --- | --- | --- |
+| PROVISIONING | client opens on `return.created` | skeleton | none |
+| RECEIVED | `GET /api/returns/{id}` returns | product + order facts | Cancel return |
+| INVESTIGATING | `investigation.started` | `AI investigating…` spinner | none (close ok) |
+| PROPOSAL_READY | `proposal.ready` | proposal, justification, amount, confirmation flag | Approve / Deny (agent) |
+| AWAITING_SUPERVISOR | `supervisor.required` | sealed action + agent decision | Confirm / Reject (supervisor) |
+| REFUNDING | `refund.executed` | provider ref + idempotency key | — |
+| RESOLVED | `verification.completed`, `return.finished` | verified badge + synced systems | Open audit |
+
+### 12.3 Field bindings
+
+| Field | Source | Notes |
+| --- | --- | --- |
+| Product title, image, price, description, category, slug, id | `GET /products/{id}` (cache → snapshot, `A6`) | price is advisory; refund uses snapshot |
+| Order code, purchase date, delivery date, quantity, line item | `GET /api/returns/{id}` | immutable snapshot |
+| Customer name | return detail | email redacted unless actor is staff |
+| Days remaining in window | computed from `delivered_at` + `window_days` | shown as a policy fact |
+| Recommended decision, confidence, reason code | proposal | server-provided |
+| Justification | proposal | always labeled **UNTRUSTED** |
+| Refund amount / total / supervisor_required | computed `Entitlement` | authoritative |
+| Policy citations, evidence refs, risk flags | proposal | links to `policy.read` and Platzi refs |
+| `action_hash`, required role, existing decisions | approval artifact | short hash displayed, full hash copyable |
+
+### 12.4 Mockups
+
+Web drawer (right-hand pane, auto-opened):
+
+```
+┌──────────────────────────────────────────────┐
+│ Return RET-2026-000123            [×] [pop]  │
+│ Status: PROPOSAL_READY                        │
+├──────────────────────────────────────────────┤
+│ Product   Classic Comfort Drawstring Joggers  │
+│           $79.00 · Clothes · platzi:7         │
+│           [image]  description…               │
+│ Order     ord_1001 · purchased 2026-08-20     │
+│           delivered 2026-08-24 · qty 1        │
+│ Customer  Jhon (john@mail.com)                │
+├──────────────────────────────────────────────┤
+│ AI PROPOSAL                        UNTRUSTED  │
+│   Recommend: APPROVE (conf 0.82)              │
+│   Reason:    damaged_in_transit               │
+│   Refund:    $79.00  ⚠ confirmation required  │
+│   Policy:    §3.1 within 30 days              │
+│   “Photo confirms damage; within window…”     │
+├──────────────────────────────────────────────┤
+│ [ Approve ]  [ Deny ]   (supervisor: Confirm) │
+│ [ Open audit ]        action_hash: 9f2ab1…    │
+└──────────────────────────────────────────────┘
+```
+
+Terminal TUI pane (`A12`):
+
+```
+╔═ Returns ═════════════════════════════════════════════════╗
+║ ● RET-000123  Joggers  $79.00   PROPOSAL_READY            ║
+║ ○ RET-000124  Hoodie   $18.00   AWAITING_AGENT            ║
+╠═══════════════════════════════════════════════════════════╣
+║ AI investigating… [proposal.ready in 1.2s]                ║
+║ Recommend APPROVE · $79.00 · supervisor required          ║
+║ [a]pprove [d]eny [c]onfirm [r]eject [o]pen-audit [esc]    ║
+╚═══════════════════════════════════════════════════════════╝
+```
+
+### 12.5 Event and action flow
+
+1. `return.created` on `/api/events` → console opens one window (dedupe by `return_id`).
+2. Window fetches `GET /api/returns/{id}` for product + order facts.
+3. Window subscribes to `GET /api/returns/{id}/events` and advances phases as events arrive.
+4. Approve/Deny/Confirm/Reject call the role-checked endpoints in Section 7; the server resumes
+   streaming so every window reflects the new state.
+5. Late joiners/reconnects replay via `Last-Event-ID` or `GET /api/returns/{id}/timeline`.
+
+### 12.6 Security and UX rules
+
+- The AI justification is always rendered under an **UNTRUSTED** label; amounts come from the
+  entitlement, never from the narrative.
+- The window has no elevated authority: every action re-checks the actor's role server-side and
+  issues the same signed approval tokens. Stage separation of duties (`A10`) still applies.
+- Auto-open is best-effort. The Returns queue in the main console always lists the return, so closing
+  a window never loses work; windows are deduplicated per return and overflow beyond a small cap
+  (default 5) collapses into a counter.
+- Keyboard shortcuts (`A`/`D`/`C`/`R`, `Esc` to close — never to cancel), focus management, and an
+  `aria-live` status region for screen readers.
+- No secrets or unnecessary PII; Platzi `password` is never present in any payload (`8.5`).
+
+### 12.7 Failure and fallback
+
+| Situation | Behavior |
+| --- | --- |
+| SSE/WebSocket unavailable | Poll `/api/returns/{id}/timeline` every 2s; banner "live updates unavailable" |
+| LLM slow/timeout | Keep `AI investigating…`; on timeout show the deterministic fallback proposal |
+| Event missed | `Last-Event-ID` replay; else timeline backfill on focus |
+| Multiple returns at once | Stacked windows with an overflow counter; newest focused |
+| Window closed mid-flow | Queue remains authoritative; reopening resumes from audit `seq` |
+
+### 12.8 Demo flow (the friend)
+
+```bash
+python -m scripts.file_return --email john@mail.com --order ord_1001 --item oi_1001 \
+  --reason "arrived cracked" --evidence https://example.com/photo.jpg
+```
+
+1. Window auto-opens and shows the product from Platzi + the order snapshot.
+2. `AI investigating…` → proposal with justification and `$79.00` refund (confirmation required).
+3. Agent approves; because `$79.00 > $25.00`, the window moves to `AWAITING_SUPERVISOR`.
+4. Supervisor confirms; refund executes idempotently and the verifier flips the window to
+   `RESOLVED (verified)`.
+
+---
+
+## 13. Assumptions Recap, Open Questions, Risks & Non-Goals
+
+### 13.1 Open questions for product
 
 1. **Partial refunds:** may an Agent approve only some line items? (Design supports `partial`.)
 2. **Shipping/tax/restocking:** refunded or not? (Assumed excluded, `A3`.)
@@ -835,7 +1050,7 @@ cd frontend && npm run typecheck
 5. **Evidence requirements:** is a photo mandatory for `defective`/`damaged_in_transit`? (Design
    treats missing evidence as a `needs_info`/risk flag.)
 
-### 12.2 Risks
+### 13.2 Risks
 
 | Risk | Mitigation |
 | --- | --- |
@@ -846,7 +1061,7 @@ cd frontend && npm run typecheck
 | Two-stage collusion / same-person approval | Separation of duties enforced and audited (`A10`) |
 | Public API rate limits | Cache, backoff, breaker, degrade |
 
-### 12.3 Non-goals (v1)
+### 13.3 Non-goals (v1)
 
 - Writing to Platzi (creating products/users/categories) (`A11`).
 - Payment capture, chargebacks and tax engines.
