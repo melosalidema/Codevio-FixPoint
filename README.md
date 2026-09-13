@@ -18,10 +18,11 @@ This repository is a production-ready build of `docs/fixpoint-plan.html`:
 
 ## Demo video
 
-The 2:49 candidate submission recording is documented in [`docs/DEMO_VIDEO.md`](docs/DEMO_VIDEO.md).
+Watch the 2:49 submission recording: [Fixpoint multi-app agent demo](https://youtu.be/0u5WcobheGo).
+
+Additional reviewer notes and upload details are in [`docs/DEMO_VIDEO.md`](docs/DEMO_VIDEO.md).
 The original high-resolution MP4 remains local-only because committing a 147 MB binary would make
-cloning, pushes, and deployment unreliable. Replace the hosting placeholder in that file with the
-final public video URL before submission.
+cloning, pushes, and deployment unreliable.
 
 ---
 

@@ -132,6 +132,6 @@ The system never reports success it cannot verify and never fails into an unsafe
 - Repository: `Codevio-FixPoint`
 - Design document: [`docs/fixpoint-plan.html`](docs/fixpoint-plan.html)
 - Demo recording notes: [`docs/DEMO_VIDEO.md`](docs/DEMO_VIDEO.md)
-- Public demo URL: `TODO: paste the hosted demo URL here`
+- Public demo URL: [Fixpoint multi-app agent demo](https://youtu.be/0u5WcobheGo)
 - Run: `docker compose up --build` → `http://localhost:8000`
 - Inspect: `cd backend && python -m app.evals.runner` (16/16) and `python -m pytest -q`

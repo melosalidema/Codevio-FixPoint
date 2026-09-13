@@ -6,13 +6,12 @@
 - Duration: **2:49**
 - Source size: **154,074,631 bytes**
 - Current location: local-only, outside the repository
-- Hosting status: **not yet uploaded**
+- Hosting status: **uploaded**
 
-The binary is intentionally not committed to git. Keep the original recording as the submission
-source, upload it to the submission platform or video host, then replace the placeholder URL
-below.
+The binary is intentionally not committed to git. The local recording remains the high-resolution
+backup source.
 
-Public video URL: `TODO: paste the hosted demo URL here`
+Public video URL: [Fixpoint multi-app agent demo](https://youtu.be/0u5WcobheGo)
 
 ## What the video demonstrates
 
@@ -51,11 +50,8 @@ While watching, confirm that the recording shows:
 
 ## Hosting checklist
 
-1. Upload the source MP4 as an unlisted or otherwise submission-appropriate video.
+1. Confirm that the uploaded video plays from start to finish.
 2. Verify that captions, audio, and text remain legible after platform compression.
-3. Replace `TODO: paste the hosted demo URL here` with the final URL.
-4. Add that same URL to:
-   - `README.md`
-   - `SUBMISSION.md`
-   - The official hackathon submission form.
+3. The public URL is now wired into `README.md`, `SUBMISSION.md`, and this file.
+4. Add that same URL to the official hackathon submission form.
 5. Keep the local 147 MB source file for backup; do not commit it to the repository.
